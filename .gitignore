@@ -1,0 +1,42 @@
+# Environments
+.env
+
+# Qdrant Storage
+qdrant_storage/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Virtual Environment
+venv/
+env/
+.venv/
+.env_folder/
+
+# Output artifacts
+src/output/
+output
+
+# macOS / Windows system files
+.DS_Store
+Thumbs.db
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Memory Bank
+memory-bank/
+
+# Misc
+.gemini/
+.dockerignore
+references/
