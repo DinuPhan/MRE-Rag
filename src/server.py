@@ -22,6 +22,8 @@ async def lifespan(app: FastAPI):
 # Define Pydantic models for REST endpoints
 class CrawlRequest(BaseModel):
     url: str
+    max_depth: int = 0
+    max_pages: int = 10
 
 class QueryRequest(BaseModel):
     query: str
@@ -46,7 +48,11 @@ async def crawl_endpoint(request: CrawlRequest):
     REST Endpoint: Crawl a URL and ingest it into the Qdrant vector database.
     """
     try:
-        result = await pipeline.ingest_url(request.url)
+        result = await pipeline.ingest_url(
+            request.url, 
+            max_depth=request.max_depth,
+            max_pages=request.max_pages
+        )
         if not result.get("success"):
             raise HTTPException(status_code=500, detail=result.get("error"))
         return result
@@ -70,13 +76,14 @@ def query_endpoint(request: QueryRequest):
 mcp = FastMCP("mkre-rag-mcp")
 
 @mcp.tool()
-async def crawl_single_page(url: str) -> str:
+async def crawl_website(url: str, max_depth: int = 0, max_pages: int = 10) -> str:
     """
-    Crawl a single web page, extract markdown, generate Gemini embeddings, and store in Qdrant.
-    It will also export a local raw text chunk (llms.txt format).
+    Crawl a web page (or .xml sitemap), extract markdown, generate embeddings, and store in Qdrant.
+    It will also export local raw text chunks (llms.txt format).
+    Specify max_depth>0 to recursively discover internal links.
     """
     try:
-        result = await pipeline.ingest_url(url)
+        result = await pipeline.ingest_url(url, max_depth=max_depth, max_pages=max_pages)
         if result.get("success"):
             return result.get("message", "Success")
         else:

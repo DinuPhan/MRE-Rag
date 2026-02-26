@@ -60,12 +60,18 @@ The application will be available at `http://localhost:8051`. Qdrant runs native
 
 ### 1. Ingesting Data (Crawl)
 
-To crawl a webpage, generate embeddings, and store them in Qdrant, send a POST request to the `/crawl` endpoint with the target URL:
+To crawl a webpage, generate embeddings, and store them in Qdrant, send a POST request to the `/crawl` endpoint with the target URL. 
+By default, this crawls only the exact URL. You can use the optional parameters `max_depth` (to recursively follow internal links) and `max_pages` (to limit total documents crawled).
+Furthermore, if you pass a `.xml` sitemap or a `.txt` list of URLs, the crawler will automatically extract and process all links within it.
 
 ```bash
 curl -X POST "http://localhost:8051/crawl" \
      -H "Content-Type: application/json" \
-     -d '{"url": "https://docs.crawl4ai.com/core/quickstart"}'
+     -d '{
+       "url": "https://docs.crawl4ai.com/core/quickstart",
+       "max_depth": 1,
+       "max_pages": 10
+     }'
 ```
 
 ### 2. Semantic Search (Query)

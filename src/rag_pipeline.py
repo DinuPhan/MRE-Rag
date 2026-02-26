@@ -35,49 +35,59 @@ class RagPipeline:
             
         return chunks
 
-    async def ingest_url(self, url: str) -> dict:
+    async def ingest_url(self, url: str, max_depth: int = 0, max_pages: int = 10) -> dict:
         """
-        Crawls a URL, chunks the content, embeds it using Gemini, and saves to Qdrant.
+        Crawls a URL (or sitemap/.txt), chunks the content from all pages, embeds them, and saves to Qdrant.
         """
         # 1. Crawl
-        crawl_result = await self.crawler.crawl_url(url)
-        if not crawl_result.get("success"):
-            return {"success": False, "error": crawl_result.get("error")}
+        crawl_results = await self.crawler.crawl_urls(url, max_depth=max_depth, max_pages=max_pages)
+        if not crawl_results:
+            return {"success": False, "error": "No pages were successfully crawled."}
             
-        markdown = crawl_result["markdown"]
-        title = crawl_result["title"]
+        all_chunks = []
+        all_metadatas = []
         
         # 2. Chunk
-        chunks = self.chunk_text(markdown)
-        if not chunks:
-            return {"success": False, "error": "No text extracted to chunk"}
+        for crawl_result in crawl_results:
+            markdown = crawl_result["markdown"]
+            page_url = crawl_result["url"]
+            title = crawl_result["title"]
             
-        print(f"Extracted {len(chunks)} chunks from {url}")
+            chunks = self.chunk_text(markdown)
+            for i, chunk in enumerate(chunks):
+                all_chunks.append(chunk)
+                all_metadatas.append({
+                    "url": page_url,
+                    "title": title,
+                    "chunk_index": i
+                })
+                
+        if not all_chunks:
+            return {"success": False, "error": "No text extracted to chunk from any page."}
+            
+        print(f"Extracted {len(all_chunks)} chunks from {len(crawl_results)} pages.")
         
-        # 3. Embed
-        # Qdrant batch upserts are faster when embedded together
+        # 3. Embed (in batches to avoid overwhelming the Embedding API payload limits)
+        vectors = []
         try:
-            vectors = self.embeddings.create_embeddings_batch(chunks)
+            batch_size = 100
+            for i in range(0, len(all_chunks), batch_size):
+                batch_chunks = all_chunks[i:i + batch_size]
+                batch_vectors = self.embeddings.create_embeddings_batch(batch_chunks)
+                vectors.extend(batch_vectors)
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": f"Embedding generator failed: {str(e)}"}
             
-        # 4. Meta packaging
-        metadatas = []
-        for i in range(len(chunks)):
-            metadatas.append({
-                "url": url,
-                "title": title,
-                "chunk_index": i
-            })
-            
-        # 5. Insert
+        # 4. Insert
+        # We group all sub-pages under the collection name of the initial target URL
         collection_name = QdrantManager.escape_url(url)
-        self.qdrant.upsert_knowledge_chunks(collection_name, chunks, vectors, metadatas)
+        self.qdrant.upsert_knowledge_chunks(collection_name, all_chunks, vectors, all_metadatas)
         
         return {
             "success": True,
-            "message": f"Successfully ingested {url} into Qdrant.",
-            "chunks_processed": len(chunks)
+            "message": f"Successfully ingested {len(crawl_results)} pages into Qdrant collection '{collection_name}'.",
+            "chunks_processed": len(all_chunks),
+            "pages_processed": len(crawl_results)
         }
 
     def query(self, text: str, url: str = None, limit: int = 5) -> List[Dict[str, Any]]:
