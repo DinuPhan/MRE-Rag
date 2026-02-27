@@ -43,9 +43,10 @@ async def run_test():
     print(result_ai)
     
     print("\n--- Querying Code Snippets ---")
-    search = pipeline.qdrant.search_code(collection, [0.0]*pipeline.embeddings.dimension, limit=1)
+    query_text = "test hybrid pipeline"
+    search = pipeline.query(query_text, url="hybrid_test", limit=1, code_search=True)
     if search:
-        print("Code Snippet Embedded Payload:\n")
+        print(f"Code Snippet Embedded Payload for '{query_text}':\n")
         print(search[0]['content'])
 
 if __name__ == "__main__":
