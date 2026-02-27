@@ -100,7 +100,9 @@ class IntelligentChunker:
 
             # If we're at the end of the text, take what's left
             if end >= text_length:
-                chunks.append(text[start:].strip())
+                chunk = text[start:].strip()
+                if chunk:
+                    chunks.append(chunk)
                 break
 
             # Slicing the provisional window
@@ -109,24 +111,28 @@ class IntelligentChunker:
             # --- Splitting Priority 1: Prevent severing code blocks ---
             # Try to find a code block boundary (```) searching backwards
             split_idx = window.rfind('```')
-            
-            # Only break if it is decently far into the chunk (avoids micro-chunking)
             if split_idx != -1 and split_idx > safe_chunk_size * 0.3:
-                # We want to keep the backticks cleanly inside ONE chunk.
-                # If we slice right BEFORE the backticks, the code block is deferred entirely to the NEXT chunk.
                 end = start + split_idx
-
-            # --- Splitting Priority 2: Paragraph Breaks (\n\n) ---
-            elif '\n\n' in window:
+            else:
+                # --- Splitting Priority 2: Paragraph Breaks (\n\n) ---
                 split_idx = window.rfind('\n\n')
-                if split_idx > safe_chunk_size * 0.3:
+                if split_idx != -1 and split_idx > safe_chunk_size * 0.3:
                     end = start + split_idx
-
-            # --- Splitting Priority 3: Sentence Breaks (. ) ---
-            elif '. ' in window:
-                split_idx = window.rfind('. ')
-                if split_idx > safe_chunk_size * 0.3:
-                    end = start + split_idx + 1 # Include the period
+                else:
+                    # --- Splitting Priority 3: Sentence Breaks (. ) ---
+                    split_idx = window.rfind('. ')
+                    if split_idx != -1 and split_idx > safe_chunk_size * 0.3:
+                        end = start + split_idx + 1 # Include the period
+                    else:
+                        # --- Splitting Priority 4: Line Breaks (\n) (Crucial for code blocks) ---
+                        split_idx = window.rfind('\n')
+                        if split_idx != -1 and split_idx > safe_chunk_size * 0.3:
+                            end = start + split_idx
+                        else:
+                            # --- Splitting Priority 5: Space Breaks ( ) ---
+                            split_idx = window.rfind(' ')
+                            if split_idx != -1 and split_idx > safe_chunk_size * 0.1:
+                                end = start + split_idx
 
             # Extract the refined chunk and clean whitespace
             chunk = text[start:end].strip()
