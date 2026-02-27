@@ -1,4 +1,11 @@
 import asyncio
+import sys
+import os
+import time
+
+# Add the 'src' directory to the Python path to resolve imports properly
+sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+
 from src.rag_pipeline import RagPipeline
 import time
 

@@ -3,6 +3,7 @@ from typing import List, Dict, Any
 from crawler import MreCrawler
 from embeddings import EmbeddingManager
 from qdrant_manager import QdrantManager
+from chunking import IntelligentChunker
 
 class RagPipeline:
     def __init__(self):
@@ -12,28 +13,16 @@ class RagPipeline:
         self.crawler = MreCrawler()
         self.embeddings = EmbeddingManager()
         self.qdrant = QdrantManager(vector_size=self.embeddings.dimension)
+        self.chunker = IntelligentChunker(chunk_size=1500)
 
     def chunk_text(self, text: str, chunk_size: int = 1500) -> List[str]:
         """
-        Naive chunking function for text.
-        Splits by characters but tries to respect paragraphs where possible.
+        Deprecated: Native naive chunking. Preserved for backward compatibility.
+        Routes to the new IntelligentChunker.
         """
-        chunks = []
-        paragraphs = text.split("\n\n")
-        current_chunk = ""
-        
-        for paragraph in paragraphs:
-            if len(current_chunk) + len(paragraph) <= chunk_size:
-                current_chunk += paragraph + "\n\n"
-            else:
-                if current_chunk.strip():
-                    chunks.append(current_chunk.strip())
-                current_chunk = paragraph + "\n\n"
-        
-        if current_chunk.strip():
-            chunks.append(current_chunk.strip())
-            
-        return chunks
+        if chunk_size != getattr(self.chunker, 'chunk_size', 1500):
+            self.chunker.chunk_size = chunk_size
+        return self.chunker.chunk_text(text)
 
     async def ingest_url(self, url: str, max_depth: int = 0, max_pages: int = 10) -> dict:
         """
