@@ -121,3 +121,15 @@ class QdrantManager:
         # Sort by score descending and take top 'limit' across all
         all_results.sort(key=lambda x: x["score"], reverse=True)
         return all_results[:limit]
+
+    def search_code(self, collection_name: str, query_vector: List[float], limit: int = 5) -> List[Dict[str, Any]]:
+        """
+        Specialized search to retrieve isolated code blocks.
+        The `_code` suffix is guaranteed by `RagPipeline`.
+        """
+        code_collection = f"{collection_name}_code"
+        try:
+            return self.search(code_collection, query_vector, limit=limit)
+        except Exception as e:
+            print(f"Code Collection Search Error (likely empty/nonexistent): {e}")
+            return []

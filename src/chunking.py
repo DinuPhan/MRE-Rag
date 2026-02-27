@@ -137,3 +137,66 @@ class IntelligentChunker:
             start = end
 
         return chunks
+
+def extract_code_blocks(markdown_content: str, min_length: int = 50) -> List[dict]:
+    """
+    Extracts isolated ```` code blocks from a markdown document.
+    Returns a list of dictionaries containing the code, language, and the 
+    surrounding 500 characters of prose context.
+    """
+    code_blocks = []
+    content = markdown_content.strip()
+    
+    # Handle edge case where the document starts directly with a code block
+    start_offset = 3 if content.startswith('```') else 0
+    
+    # Find all occurrences of triple backticks
+    backtick_positions = []
+    pos = start_offset
+    while True:
+        pos = markdown_content.find('```', pos)
+        if pos == -1:
+            break
+        backtick_positions.append(pos)
+        pos += 3
+        
+    # Process pairs of backticks to extract blocks
+    i = 0
+    while i < len(backtick_positions) - 1:
+        start_pos = backtick_positions[i]
+        end_pos = backtick_positions[i + 1]
+        
+        # Raw block content
+        code_section = markdown_content[start_pos+3:end_pos]
+        
+        # Extract language specifier if present
+        lines = code_section.split('\n', 1)
+        if len(lines) > 1 and lines[0].strip() and ' ' not in lines[0].strip() and len(lines[0].strip()) < 20:
+            language = lines[0].strip()
+            code_content = lines[1].strip()
+        else:
+            language = ""
+            code_content = code_section.strip()
+            
+        # Ignore extremely tiny snippets
+        if len(code_content) < min_length:
+            i += 2
+            continue
+            
+        # Extract surrounding context (500 chars before and after)
+        context_start = max(0, start_pos - 500)
+        context_before = markdown_content[context_start:start_pos].strip()
+        
+        context_end = min(len(markdown_content), end_pos + 3 + 500)
+        context_after = markdown_content[end_pos + 3:context_end].strip()
+        
+        code_blocks.append({
+            'code': code_content,
+            'language': language,
+            'context_before': context_before,
+            'context_after': context_after
+        })
+        
+        i += 2
+        
+    return code_blocks

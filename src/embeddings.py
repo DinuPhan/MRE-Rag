@@ -136,8 +136,11 @@ class InhouseEmbeddingProvider(BaseEmbeddingProvider):
 class EmbeddingManager:
     """
     Factory Router. Abstracts away embedding operations natively utilizing internal Providers dynamically.
+    Includes robust retry mechanisms with exponential backoff for rate limit resilience.
     """
     def __init__(self):
+        import time  # For exponential backoff
+        self.time = time
         provider_type = os.getenv("EMBEDDING_PROVIDER", "GEMINI").upper()
         
         if provider_type == "OPENAI":
@@ -162,8 +165,27 @@ class EmbeddingManager:
             raise
 
     def create_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
-        try:
-            return self._provider.create_embeddings_batch(texts)
-        except Exception as e:
-            print(f"Error generating batch embeddings via {type(self._provider).__name__}: {e}")
-            raise
+        max_retries = 3
+        retry_delay = 1.0
+
+        for retry in range(max_retries):
+            try:
+                return self._provider.create_embeddings_batch(texts)
+            except Exception as e:
+                if retry < max_retries - 1:
+                    print(f"Error generating batch embeddings (attempt {retry + 1}/{max_retries}): {e}")
+                    print(f"Retrying in {retry_delay} seconds...")
+                    self.time.sleep(retry_delay)
+                    retry_delay *= 2
+                else:
+                    print(f"Failed to create batch embeddings after {max_retries} attempts: {e}")
+                    print("Attempting to create embeddings individually as a fallback...")
+                    embeddings = []
+                    for i, text in enumerate(texts):
+                        try:
+                            emb = self._provider.create_embedding(text)
+                            embeddings.append(emb)
+                        except Exception as individual_error:
+                            print(f"Failed to create embedding for chunk {i}: {individual_error}")
+                            embeddings.append([0.0] * self.dimension)
+                    return embeddings
