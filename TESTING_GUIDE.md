@@ -47,5 +47,19 @@ A simple utility to verify the state of your Qdrant database, listing out all ac
 docker exec mre_rag-app-1 python3 /app/tests/test_db.py
 ```
 
+#### 5. `test_neo4j_connection.py`
+A simple utility to verify that the core FastAPI application container can successfully establish a secure bolt connection to the underlying Neo4j container.
+**Execute:**
+```bash
+docker exec mre_rag-app-1 python3 /app/tests/test_neo4j_connection.py
+```
+
+#### 6. `test_neo4j_parse_repo.py`
+A structural demonstration that uses the `ast` parser to map the actual Github MRE-Rag repository code into a graph of Classes, Methods, Functions, and Import relationships inside of Neo4j.
+**Execute:**
+```bash
+docker exec mre_rag-app-1 python3 /app/tests/test_neo4j_parse_repo.py
+```
+
 ---
 *Note: While scripts like `test_chunker.py` and `test_db.py` can technically be run locally safely, executing them uniformly through the Docker container guarantees zero environment or dependency mismatch warnings.*
