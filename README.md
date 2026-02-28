@@ -88,6 +88,22 @@ curl -X POST "http://localhost:8051/query" \
      }'
 ```
 
+### 3. Neo4j Knowledge Graph
+
+The Docker Compose stack natively includes a **Neo4j** community container running on port `7687` for hallucination detection and code graph mapping. 
+You can use the bundled `parse_repo_into_neo4j.py` script to clone and map any GitHub repository's structural AST (Classes, Methods, Functions, Imports) directly into the Neo4j database for advanced graph queries.
+
+To test indexing a repository (like this one) via the Docker container:
+
+```bash
+docker exec mre_rag-app-1 python3 /app/tests/test_neo4j_parse_repo.py
+```
+
+To explore the graph visually or run raw Cypher queries, access the built-in Neo4j HTTP browser:
+- **URL**: `http://localhost:7474`
+- **User**: `neo4j` (or your configured `NEO4J_USER`)
+- **Password**: `password` (or your configured `NEO4J_PASSWORD`)
+
 ## Local Environment
 
 If you ever wish to run the app outside of docker:
