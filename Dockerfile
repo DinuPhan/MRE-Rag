@@ -17,7 +17,8 @@ RUN pip install --no-cache-dir \
     "python-dotenv>=1.0.1" \
     "httpx>=0.27.0" \
     "markdown>=3.7" \
-    "beautifulsoup4>=4.12.3"
+    "beautifulsoup4>=4.12.3" \
+    "neo4j>=5.24.0"
 
 # Install Chromium matching the pip playwright version
 RUN playwright install chromium
