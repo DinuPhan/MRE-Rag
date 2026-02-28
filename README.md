@@ -104,6 +104,37 @@ To explore the graph visually or run raw Cypher queries, access the built-in Neo
 - **User**: `neo4j` (or your configured `NEO4J_USER`)
 - **Password**: `password` (or your configured `NEO4J_PASSWORD`)
 
+#### Example Cypher Queries
+
+Once in the Neo4j browser, you can run the following queries to explore the repository's AST structure:
+
+**1. Find all Classes defined in a specific file:**
+```cypher
+MATCH (f:File)-[:DEFINES]->(c:Class)
+WHERE f.name = "intelligent_chunker.py"
+RETURN c.name, c.full_name
+```
+
+**2. Find all Methods belonging to a specific Class:**
+```cypher
+MATCH (c:Class {name: "IntelligentChunker"})-[:HAS_METHOD]->(m:Method)
+RETURN m.name, m.args, m.return_type
+```
+
+**3. Find which Files import a specific module:**
+```cypher
+MATCH (source:File)-[:IMPORTS]->(target:File)
+WHERE target.module_name CONTAINS "models"
+RETURN source.path, target.module_name
+```
+
+**4. Find all standalone Functions across the repository:**
+```cypher
+MATCH (f:Function)
+RETURN f.name, f.full_name, f.args
+LIMIT 10
+```
+
 ## Local Environment
 
 If you ever wish to run the app outside of docker:
