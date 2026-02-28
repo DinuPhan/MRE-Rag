@@ -135,6 +135,14 @@ RETURN f.name, f.full_name, f.args
 LIMIT 10
 ```
 
+**5. View the entire graph structure (nodes and relationships):**
+```cypher
+MATCH (n)-[r]->(m)
+RETURN n, r, m
+LIMIT 300
+```
+
+
 ## Local Environment
 
 If you ever wish to run the app outside of docker:
