@@ -16,14 +16,19 @@ COPY pyproject.toml .
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system \
     "crawl4ai>=0.4.0" \
-    "tree-sitter>=0.21.0" \
-    "tree-sitter-python" \
+    "mcp>=1.0.0" \
     "fastapi>=0.115.0" \
     "uvicorn>=0.30.6" \
+    "pydantic>=2.9.0" \
     "qdrant-client>=1.11.0" \
     "google-genai>=0.3.0" \
+    "python-dotenv>=1.0.1" \
+    "httpx>=0.27.0" \
+    "markdown>=3.7" \
+    "beautifulsoup4>=4.12.3" \
     "neo4j>=5.24.0" \
-    "beautifulsoup4>=4.12.3"
+    "tree-sitter>=0.21.0" \
+    "tree-sitter-python"
 
 # Stage 2: Runtime
 FROM mcr.microsoft.com/playwright/python:v1.48.0-jammy AS runtime
@@ -35,7 +40,7 @@ RUN groupadd -g 10001 graphrag && \
 WORKDIR /app
 
 # Copy the python environment from builder
-COPY --from=builder /usr/local/lib/python3.11/dist-packages /usr/local/lib/python3.11/dist-packages
+COPY --from=builder /usr/local/lib/python3.10/dist-packages /usr/local/lib/python3.10/dist-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Install ONLY Chromium (Skip WebKit/Firefox to save ~700MB)
@@ -57,6 +62,9 @@ USER graphrag
 # Healthcheck to ensure FastAPI is alive
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8051/health || exit 1
+
+# Ensure local modules in src are importable without installing as a package
+ENV PYTHONPATH=/app/src:/app
 
 EXPOSE 8051
 

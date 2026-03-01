@@ -19,7 +19,8 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Set
-import ast
+import tree_sitter_python as tspy
+from tree_sitter import Language, Parser
 
 from dotenv import load_dotenv
 from neo4j import AsyncGraphDatabase
@@ -61,14 +62,20 @@ class Neo4jCodeAnalyzer:
             'jsonschema', 'cerberus', 'voluptuous', 'schema', 'jinja2', 'mako',
             'cryptography', 'bcrypt', 'passlib', 'jwt', 'authlib', 'oauthlib'
         }
-    
+        
+        # Initialize Tree-sitter for Python
+        self.language = Language(tspy.language())
+        self.parser = Parser(self.language)
+
     def analyze_python_file(self, file_path: Path, repo_root: Path, project_modules: Set[str]) -> Dict[str, Any]:
-        """Extract structure for direct Neo4j insertion"""
+        """Extract structure for direct Neo4j insertion using Tree-sitter"""
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
             
-            tree = ast.parse(content)
+            # Parse using tree-sitter
+            tree = self.parser.parse(bytes(content, "utf8"))
+            
             relative_path = str(file_path.relative_to(repo_root))
             module_name = self._get_importable_module_name(file_path, repo_root, relative_path)
             
@@ -77,22 +84,99 @@ class Neo4jCodeAnalyzer:
             functions = []
             imports = []
             
-            for node in ast.walk(tree):
-                if isinstance(node, ast.ClassDef):
-                    # Extract class with its methods and attributes
+            # Helper to walk tree nodes
+            def walk_nodes(node):
+                yield node
+                for child in node.children:
+                    yield from walk_nodes(child)
+
+            for node in walk_nodes(tree.root_node):
+                if node.type == 'class_definition':
+                    class_name_node = node.child_by_field_name('name')
+                    if not class_name_node:
+                        continue
+                    class_name = content[class_name_node.start_byte:class_name_node.end_byte]
+                    
                     methods = []
                     attributes = []
                     
-                    for item in node.body:
-                        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                            if not item.name.startswith('_'):  # Public methods only
-                                # Extract comprehensive parameter info
-                                params = self._extract_function_parameters(item)
+                    body_node = node.child_by_field_name('body')
+                    if body_node:
+                        for item in body_node.children:
+                            if item.type == 'function_definition':
+                                method_name_node = item.child_by_field_name('name')
+                                if not method_name_node:
+                                    continue
+                                method_name = content[method_name_node.start_byte:method_name_node.end_byte]
                                 
-                                # Get return type annotation
-                                return_type = self._get_name(item.returns) if item.returns else 'Any'
+                                if not method_name.startswith('_') or method_name == '__init__':
+                                    params = self._extract_function_parameters(item, content)
+                                    
+                                    return_type_node = item.child_by_field_name('return_type')
+                                    return_type = 'Any'
+                                    if return_type_node:
+                                        return_type = content[return_type_node.start_byte:return_type_node.end_byte]
+                                    
+                                    params_detailed = []
+                                    for p in params:
+                                        param_str = f"{p['name']}:{p['type']}"
+                                        if p['optional'] and p['default'] is not None:
+                                            param_str += f"={p['default']}"
+                                        elif p['optional']:
+                                            param_str += "=None"
+                                        if p['kind'] != 'positional':
+                                            param_str = f"[{p['kind']}] {param_str}"
+                                        params_detailed.append(param_str)
+                                    
+                                    methods.append({
+                                        'name': method_name,
+                                        'params': params,
+                                        'params_detailed': params_detailed,
+                                        'return_type': return_type,
+                                        'args': [p['name'] for p in params if p['name'] != 'self']
+                                    })
+                            
+                            elif item.type == 'expression_statement':
+                                # Check for type hinted class attributes (e.g. var: int = 5)
+                                for child in item.children:
+                                    if child.type == 'assignment':
+                                        left = child.child_by_field_name('left')
+                                        if left and left.type == 'identifier':
+                                            attr_name = content[left.start_byte:left.end_byte]
+                                            if not attr_name.startswith('_'):
+                                                # Look for type annotation if possible
+                                                type_node = child.child_by_field_name('type')
+                                                attr_type = 'Any'
+                                                if type_node:
+                                                    attr_type = content[type_node.start_byte:type_node.end_byte]
+                                                
+                                                attributes.append({
+                                                    'name': attr_name,
+                                                    'type': attr_type
+                                                })
+                    
+                    classes.append({
+                        'name': class_name,
+                        'full_name': f"{module_name}.{class_name}",
+                        'methods': methods,
+                        'attributes': attributes
+                    })
+                
+                elif node.type == 'function_definition':
+                    # Only map it if it's top-level (direct child of the module)
+                    if node.parent and node.parent.type == 'module':
+                        func_name_node = node.child_by_field_name('name')
+                        if func_name_node:
+                            func_name = content[func_name_node.start_byte:func_name_node.end_byte]
+                            
+                            if not func_name.startswith('_'):
+                                params = self._extract_function_parameters(node, content)
                                 
-                                # Create detailed parameter list for Neo4j storage
+                                return_type_node = node.child_by_field_name('return_type')
+                                return_type = 'Any'
+                                if return_type_node:
+                                    return_type = content[return_type_node.start_byte:return_type_node.end_byte]
+                                
                                 params_detailed = []
                                 for p in params:
                                     param_str = f"{p['name']}:{p['type']}"
@@ -104,79 +188,40 @@ class Neo4jCodeAnalyzer:
                                         param_str = f"[{p['kind']}] {param_str}"
                                     params_detailed.append(param_str)
                                 
-                                methods.append({
-                                    'name': item.name,
-                                    'params': params,  # Full parameter objects
-                                    'params_detailed': params_detailed,  # Detailed string format
+                                params_list = [f"{p['name']}:{p['type']}" for p in params]
+                                
+                                functions.append({
+                                    'name': func_name,
+                                    'full_name': f"{module_name}.{func_name}",
+                                    'params': params,
+                                    'params_detailed': params_detailed,
+                                    'params_list': params_list,
                                     'return_type': return_type,
-                                    'args': [arg.arg for arg in item.args.args if arg.arg != 'self']  # Keep for backwards compatibility
+                                    'args': [p['name'] for p in params]
                                 })
-                        elif isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
-                            # Type annotated attributes
-                            if not item.target.id.startswith('_'):
-                                attributes.append({
-                                    'name': item.target.id,
-                                    'type': self._get_name(item.annotation) if item.annotation else 'Any'
-                                })
-                    
-                    classes.append({
-                        'name': node.name,
-                        'full_name': f"{module_name}.{node.name}",
-                        'methods': methods,
-                        'attributes': attributes
-                    })
                 
-                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    # Only top-level functions
-                    if not any(node in cls_node.body for cls_node in ast.walk(tree) if isinstance(cls_node, ast.ClassDef)):
-                        if not node.name.startswith('_'):
-                            # Extract comprehensive parameter info
-                            params = self._extract_function_parameters(node)
-                            
-                            # Get return type annotation
-                            return_type = self._get_name(node.returns) if node.returns else 'Any'
-                            
-                            # Create detailed parameter list for Neo4j storage
-                            params_detailed = []
-                            for p in params:
-                                param_str = f"{p['name']}:{p['type']}"
-                                if p['optional'] and p['default'] is not None:
-                                    param_str += f"={p['default']}"
-                                elif p['optional']:
-                                    param_str += "=None"
-                                if p['kind'] != 'positional':
-                                    param_str = f"[{p['kind']}] {param_str}"
-                                params_detailed.append(param_str)
-                            
-                            # Simple format for backwards compatibility
-                            params_list = [f"{p['name']}:{p['type']}" for p in params]
-                            
-                            functions.append({
-                                'name': node.name,
-                                'full_name': f"{module_name}.{node.name}",
-                                'params': params,  # Full parameter objects
-                                'params_detailed': params_detailed,  # Detailed string format
-                                'params_list': params_list,  # Simple string format for backwards compatibility
-                                'return_type': return_type,
-                                'args': [arg.arg for arg in node.args.args]  # Keep for backwards compatibility
-                            })
+                elif node.type == 'import_statement':
+                    # handles `import x, y`
+                    for child in node.children:
+                        if child.type == 'dotted_name':
+                            import_name = content[child.start_byte:child.end_byte]
+                            if self._is_likely_internal(import_name, project_modules):
+                                imports.append(import_name)
                 
-                elif isinstance(node, (ast.Import, ast.ImportFrom)):
-                    # Track internal imports only
-                    if isinstance(node, ast.Import):
-                        for alias in node.names:
-                            if self._is_likely_internal(alias.name, project_modules):
-                                imports.append(alias.name)
-                    elif isinstance(node, ast.ImportFrom) and node.module:
-                        if (node.module.startswith('.') or self._is_likely_internal(node.module, project_modules)):
-                            imports.append(node.module)
+                elif node.type == 'import_from_statement':
+                    # handles `from x import y`
+                    module_name_node = node.child_by_field_name('module_name')
+                    if module_name_node:
+                        import_name = content[module_name_node.start_byte:module_name_node.end_byte]
+                        if import_name.startswith('.') or self._is_likely_internal(import_name, project_modules):
+                            imports.append(import_name)
             
             return {
                 'module_name': module_name,
                 'file_path': relative_path,
                 'classes': classes,
                 'functions': functions,
-                'imports': list(set(imports)),  # Remove duplicates
+                'imports': list(set(imports)),
                 'line_count': len(content.splitlines())
             }
             
@@ -254,143 +299,80 @@ class Neo4jCodeAnalyzer:
         # Final fallback: use the default
         return default_module
     
-    def _extract_function_parameters(self, func_node):
-        """Comprehensive parameter extraction from function definition"""
+    def _extract_function_parameters(self, func_node, file_content):
+        """Extract parameters from a tree-sitter function definition"""
         params = []
         
-        # Regular positional arguments
-        for i, arg in enumerate(func_node.args.args):
-            if arg.arg == 'self':
-                continue
+        params_node = func_node.child_by_field_name('parameters')
+        if not params_node:
+            return params
+            
+        for param in params_node.children:
+            if param.type in ('identifier'):
+                name = file_content[param.start_byte:param.end_byte]
+                if name == 'self':
+                    continue
+                params.append({
+                    'name': name,
+                    'type': 'Any',
+                    'kind': 'positional',
+                    'optional': False,
+                    'default': None
+                })
+            elif param.type == 'typed_parameter':
+                id_node = param.child_by_field_name('identifier')
+                type_node = param.child_by_field_name('type')
+                if id_node:
+                    name = file_content[id_node.start_byte:id_node.end_byte]
+                    ptype = 'Any'
+                    if type_node:
+                        ptype = file_content[type_node.start_byte:type_node.end_byte]
+                    if name != 'self':
+                        params.append({
+                            'name': name,
+                            'type': ptype,
+                            'kind': 'positional',
+                            'optional': False,
+                            'default': None
+                        })
+            elif param.type == 'default_parameter':
+                id_node = param.child_by_field_name('name')
+                val_node = param.child_by_field_name('value')
+                type_node = param.child_by_field_name('type')
+                if id_node:
+                    name = file_content[id_node.start_byte:id_node.end_byte]
+                    ptype = 'Any'
+                    if type_node:
+                        ptype = file_content[type_node.start_byte:type_node.end_byte]
+                    val = None
+                    if val_node:
+                        val = file_content[val_node.start_byte:val_node.end_byte]
+                    if name != 'self':
+                        params.append({
+                            'name': name,
+                            'type': ptype,
+                            'kind': 'positional',
+                            'optional': True,
+                            'default': val
+                        })
+            elif param.type == 'list_splat_pattern':
+                params.append({
+                    'name': f"*{file_content[param.start_byte:param.end_byte].strip('*')}",
+                    'type': 'Any',
+                    'kind': 'var_positional',
+                    'optional': True,
+                    'default': None
+                })
+            elif param.type == 'dictionary_splat_pattern':
+                params.append({
+                    'name': f"**{file_content[param.start_byte:param.end_byte].strip('*')}",
+                    'type': 'Dict[str, Any]',
+                    'kind': 'var_keyword',
+                    'optional': True,
+                    'default': None
+                })
                 
-            param_info = {
-                'name': arg.arg,
-                'type': self._get_name(arg.annotation) if arg.annotation else 'Any',
-                'kind': 'positional',
-                'optional': False,
-                'default': None
-            }
-            
-            # Check if this argument has a default value
-            defaults_start = len(func_node.args.args) - len(func_node.args.defaults)
-            if i >= defaults_start:
-                default_idx = i - defaults_start
-                if default_idx < len(func_node.args.defaults):
-                    param_info['optional'] = True
-                    param_info['default'] = self._get_default_value(func_node.args.defaults[default_idx])
-            
-            params.append(param_info)
-        
-        # *args parameter
-        if func_node.args.vararg:
-            params.append({
-                'name': f"*{func_node.args.vararg.arg}",
-                'type': self._get_name(func_node.args.vararg.annotation) if func_node.args.vararg.annotation else 'Any',
-                'kind': 'var_positional',
-                'optional': True,
-                'default': None
-            })
-        
-        # Keyword-only arguments (after *)
-        for i, arg in enumerate(func_node.args.kwonlyargs):
-            param_info = {
-                'name': arg.arg,
-                'type': self._get_name(arg.annotation) if arg.annotation else 'Any',
-                'kind': 'keyword_only',
-                'optional': True,  # All kwonly args are optional unless explicitly required
-                'default': None
-            }
-            
-            # Check for default value
-            if i < len(func_node.args.kw_defaults) and func_node.args.kw_defaults[i] is not None:
-                param_info['default'] = self._get_default_value(func_node.args.kw_defaults[i])
-            else:
-                param_info['optional'] = False  # No default = required kwonly arg
-            
-            params.append(param_info)
-        
-        # **kwargs parameter
-        if func_node.args.kwarg:
-            params.append({
-                'name': f"**{func_node.args.kwarg.arg}",
-                'type': self._get_name(func_node.args.kwarg.annotation) if func_node.args.kwarg.annotation else 'Dict[str, Any]',
-                'kind': 'var_keyword',
-                'optional': True,
-                'default': None
-            })
-        
         return params
-    
-    def _get_default_value(self, default_node):
-        """Extract default value from AST node"""
-        try:
-            if isinstance(default_node, ast.Constant):
-                return repr(default_node.value)
-            elif isinstance(default_node, ast.Name):
-                return default_node.id
-            elif isinstance(default_node, ast.Attribute):
-                return self._get_name(default_node)
-            elif isinstance(default_node, ast.List):
-                return "[]"
-            elif isinstance(default_node, ast.Dict):
-                return "{}"
-            else:
-                return "..."
-        except Exception:
-            return "..."
-    
-    def _get_name(self, node):
-        """Extract name from AST node, handling complex types safely"""
-        if node is None:
-            return "Any"
-        
-        try:
-            if isinstance(node, ast.Name):
-                return node.id
-            elif isinstance(node, ast.Attribute):
-                if hasattr(node, 'value'):
-                    return f"{self._get_name(node.value)}.{node.attr}"
-                else:
-                    return node.attr
-            elif isinstance(node, ast.Subscript):
-                # Handle List[Type], Dict[K,V], etc.
-                base = self._get_name(node.value)
-                if hasattr(node, 'slice'):
-                    if isinstance(node.slice, ast.Name):
-                        return f"{base}[{node.slice.id}]"
-                    elif isinstance(node.slice, ast.Tuple):
-                        elts = [self._get_name(elt) for elt in node.slice.elts]
-                        return f"{base}[{', '.join(elts)}]"
-                    elif isinstance(node.slice, ast.Constant):
-                        return f"{base}[{repr(node.slice.value)}]"
-                    elif isinstance(node.slice, ast.Attribute):
-                        return f"{base}[{self._get_name(node.slice)}]"
-                    elif isinstance(node.slice, ast.Subscript):
-                        return f"{base}[{self._get_name(node.slice)}]"
-                    else:
-                        # Try to get the name of the slice, fallback to Any if it fails
-                        try:
-                            slice_name = self._get_name(node.slice)
-                            return f"{base}[{slice_name}]"
-                        except:
-                            return f"{base}[Any]"
-                return base
-            elif isinstance(node, ast.Constant):
-                return str(node.value)
-            elif isinstance(node, ast.Str):  # Python < 3.8
-                return f'"{node.s}"'
-            elif isinstance(node, ast.Tuple):
-                elts = [self._get_name(elt) for elt in node.elts]
-                return f"({', '.join(elts)})"
-            elif isinstance(node, ast.List):
-                elts = [self._get_name(elt) for elt in node.elts]
-                return f"[{', '.join(elts)}]"
-            else:
-                # Fallback for complex types - return a simple string representation
-                return "Any"
-        except Exception:
-            # If anything goes wrong, return a safe default
-            return "Any"
 
 
 class DirectNeo4jExtractor:

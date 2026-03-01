@@ -47,19 +47,22 @@ A simple utility to verify the state of your Qdrant database, listing out all ac
 docker exec mre_rag-app-1 python3 /app/tests/test_db.py
 ```
 
-#### 5. `test_neo4j_connection.py`
-A simple utility to verify that the core FastAPI application container can successfully establish a secure bolt connection to the underlying Neo4j container.
-**Execute:**
-```bash
-docker exec mre_rag-app-1 python3 /app/tests/test_neo4j_connection.py
-```
+### Neo4j Knowledge Graph Testing
 
-#### 6. `test_neo4j_parse_repo.py`
-A structural demonstration that uses the `ast` parser to map the actual Github MRE-Rag repository code into a graph of Classes, Methods, Functions, and Import relationships inside of Neo4j.
-**Execute:**
-```bash
-docker exec mre_rag-app-1 python3 /app/tests/test_neo4j_parse_repo.py
-```
+To verify the Neo4j knowledge graph integration, which uses `tree-sitter` for robust code structure extraction, use the provided Docker test scripts:
+
+1. **Test Neo4j Connection:**
+   Run the following script to verify the application container can connect to the Neo4j service:
+   ```bash
+   docker exec mre_rag-app-1 python3 /app/tests/test_neo4j_connection.py
+   ```
+
+2. **Test Tree-Sitter Parsed Output Parity:**
+   Run the parsing test to extract the repository and populate the graph using the `tree-sitter-python` backend:
+   ```bash
+   docker exec mre_rag-app-1 python3 /app/tests/test_neo4j_parse_repo.py
+   ```
+   This script will connect to Neo4j, create necessary nodes (Repository, File, Class, Method, Function, Attribute) and relationships (CONTAINS, DEFINES, HAS_METHOD, CALLS, IMPORTS), and finally run a verification query to ensure the data is properly structured.
 
 ---
 *Note: While scripts like `test_chunker.py` and `test_db.py` can technically be run locally safely, executing them uniformly through the Docker container guarantees zero environment or dependency mismatch warnings.*
