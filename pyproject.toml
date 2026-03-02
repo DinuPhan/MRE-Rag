@@ -16,7 +16,10 @@ dependencies = [
     "httpx>=0.27.0",
     "markdown>=3.7",
     "beautifulsoup4>=4.12.3",
-    "neo4j>=5.24.0",
-    "tree-sitter>=0.21.0",
+    "neo4j",
+    "tree-sitter",
     "tree-sitter-python",
+    "sentence-transformers",
+    "python-multipart",
+    "tree-sitter-java"
 ]

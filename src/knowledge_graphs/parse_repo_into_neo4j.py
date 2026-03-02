@@ -34,13 +34,47 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class Neo4jCodeAnalyzer:
-    """Analyzes code for direct Neo4j insertion"""
-    
+class AbstractTreeSitterAnalyzer:
     def __init__(self):
-        # External modules to ignore
+        self.language = None
+        self.parser = None
+        self.external_modules = set()
+        
+    def analyze_file(self, file_path: Path, repo_root: Path, project_modules: Set[str]) -> Dict[str, Any]:
+        raise NotImplementedError
+
+    def _get_importable_module_name(self, file_path: Path, repo_root: Path, relative_path: str) -> str:
+        """Convert a file path to a Python-style module path (a.b.c)"""
+        # Remove extension
+        path_without_ext = str(relative_path).rsplit('.', 1)[0]
+        # Replace separators with dots
+        module_path = path_without_ext.replace('\\', '.').replace('/', '.')
+        # Handle __init__ files
+        if module_path.endswith('.__init__'):
+            module_path = module_path[:-len('.__init__')]
+            
+        return module_path
+        
+    def _is_likely_internal(self, import_name: str, project_modules: Set[str]) -> bool:
+        """Heuristic to determine if an import is an internal project module"""
+        base_module = import_name.split('.')[0]
+        
+        # Explicit check against known external modules
+        if base_module in self.external_modules:
+            return False
+            
+        # Check against strictly discovered project modules
+        if base_module in project_modules:
+            return True
+            
+        # Default assumption: If we haven't mapped it to our external list, it might be internal
+        return True
+
+class PythonTreeSitterAnalyzer(AbstractTreeSitterAnalyzer):
+
+    def __init__(self):
+        super().__init__()
         self.external_modules = {
-            # Python standard library
             'os', 'sys', 'json', 'logging', 'datetime', 'pathlib', 'typing', 'collections',
             'asyncio', 'subprocess', 'ast', 're', 'string', 'urllib', 'http', 'email',
             'time', 'uuid', 'hashlib', 'base64', 'itertools', 'functools', 'operator',
@@ -49,8 +83,6 @@ class Neo4jCodeAnalyzer:
             'multiprocessing', 'concurrent', 'warnings', 'traceback', 'inspect',
             'importlib', 'pkgutil', 'types', 'weakref', 'gc', 'dataclasses', 'enum',
             'abc', 'numbers', 'decimal', 'fractions', 'math', 'cmath', 'random', 'statistics',
-            
-            # Common third-party libraries
             'requests', 'urllib3', 'httpx', 'aiohttp', 'flask', 'django', 'fastapi',
             'pydantic', 'sqlalchemy', 'alembic', 'psycopg2', 'pymongo', 'redis',
             'celery', 'pytest', 'unittest', 'mock', 'faker', 'factory', 'hypothesis',
@@ -62,12 +94,10 @@ class Neo4jCodeAnalyzer:
             'jsonschema', 'cerberus', 'voluptuous', 'schema', 'jinja2', 'mako',
             'cryptography', 'bcrypt', 'passlib', 'jwt', 'authlib', 'oauthlib'
         }
-        
-        # Initialize Tree-sitter for Python
         self.language = Language(tspy.language())
         self.parser = Parser(self.language)
 
-    def analyze_python_file(self, file_path: Path, repo_root: Path, project_modules: Set[str]) -> Dict[str, Any]:
+    def analyze_file(self, file_path: Path, repo_root: Path, project_modules: Set[str]) -> Dict[str, Any]:
         """Extract structure for direct Neo4j insertion using Tree-sitter"""
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -229,76 +259,6 @@ class Neo4jCodeAnalyzer:
             logger.warning(f"Could not analyze {file_path}: {e}")
             return None
     
-    def _is_likely_internal(self, import_name: str, project_modules: Set[str]) -> bool:
-        """Check if an import is likely internal to the project"""
-        if not import_name:
-            return False
-        
-        # Relative imports are definitely internal
-        if import_name.startswith('.'):
-            return True
-        
-        # Check if it's a known external module
-        base_module = import_name.split('.')[0]
-        if base_module in self.external_modules:
-            return False
-        
-        # Check if it matches any project module
-        for project_module in project_modules:
-            if import_name.startswith(project_module):
-                return True
-        
-        # If it's not obviously external, consider it internal
-        if (not any(ext in base_module.lower() for ext in ['test', 'mock', 'fake']) and
-            not base_module.startswith('_') and
-            len(base_module) > 2):
-            return True
-        
-        return False
-    
-    def _get_importable_module_name(self, file_path: Path, repo_root: Path, relative_path: str) -> str:
-        """Determine the actual importable module name for a Python file"""
-        # Start with the default: convert file path to module path
-        default_module = relative_path.replace('/', '.').replace('\\', '.').replace('.py', '')
-        
-        # Common patterns to detect the actual package root
-        path_parts = Path(relative_path).parts
-        
-        # Look for common package indicators
-        package_roots = []
-        
-        # Check each directory level for __init__.py to find package boundaries
-        current_path = repo_root
-        for i, part in enumerate(path_parts[:-1]):  # Exclude the .py file itself
-            current_path = current_path / part
-            if (current_path / '__init__.py').exists():
-                # This is a package directory, mark it as a potential root
-                package_roots.append(i)
-        
-        if package_roots:
-            # Use the first (outermost) package as the root
-            package_start = package_roots[0]
-            module_parts = path_parts[package_start:]
-            module_name = '.'.join(module_parts).replace('.py', '')
-            return module_name
-        
-        # Fallback: look for common Python project structures
-        # Skip common non-package directories
-        skip_dirs = {'src', 'lib', 'source', 'python', 'pkg', 'packages'}
-        
-        # Find the first directory that's not in skip_dirs
-        filtered_parts = []
-        for part in path_parts:
-            if part.lower() not in skip_dirs or filtered_parts:  # Once we start including, include everything
-                filtered_parts.append(part)
-        
-        if filtered_parts:
-            module_name = '.'.join(filtered_parts).replace('.py', '')
-            return module_name
-        
-        # Final fallback: use the default
-        return default_module
-    
     def _extract_function_parameters(self, func_node, file_content):
         """Extract parameters from a tree-sitter function definition"""
         params = []
@@ -374,6 +334,155 @@ class Neo4jCodeAnalyzer:
                 
         return params
 
+class JavaTreeSitterAnalyzer(AbstractTreeSitterAnalyzer):
+    def __init__(self):
+        super().__init__()
+        import tree_sitter_java as tsjava
+        self.language = Language(tsjava.language())
+        self.parser = Parser(self.language)
+        self.external_modules = {
+            'java', 'javax', 'org.springframework', 'org.junit', 'org.mockito',
+            'com.fasterxml.jackson', 'org.apache', 'org.slf4j', 'lombok'
+        }
+
+    def analyze_file(self, file_path: Path, repo_root: Path, project_modules: Set[str]) -> Dict[str, Any]:
+        """Extract structure using Tree-sitter Java grammar"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            tree = self.parser.parse(bytes(content, "utf8"))
+            relative_path = str(file_path.relative_to(repo_root))
+            module_name = self._get_importable_module_name(file_path, repo_root, relative_path)
+            
+            classes = []
+            functions = [] # Java doesn't have top-level functions but we keep contract
+            imports = []
+            
+            def walk_nodes(node):
+                yield node
+                for child in node.children:
+                    yield from walk_nodes(child)
+
+            for node in walk_nodes(tree.root_node):
+                if node.type == 'class_declaration':
+                    class_name_node = node.child_by_field_name('name')
+                    if not class_name_node:
+                        continue
+                    class_name = content[class_name_node.start_byte:class_name_node.end_byte]
+                    
+                    methods = []
+                    attributes = []
+                    
+                    body_node = node.child_by_field_name('body')
+                    if body_node:
+                        for item in body_node.children:
+                            if item.type == 'method_declaration':
+                                method_name_node = item.child_by_field_name('name')
+                                if not method_name_node:
+                                    continue
+                                method_name = content[method_name_node.start_byte:method_name_node.end_byte]
+                                
+                                params = self._extract_java_parameters(item, content)
+                                
+                                return_type_node = item.child_by_field_name('type')
+                                return_type = 'void'
+                                if return_type_node:
+                                    return_type = content[return_type_node.start_byte:return_type_node.end_byte]
+                                
+                                params_detailed = []
+                                for p in params:
+                                    params_detailed.append(f"{p['name']}:{p['type']}")
+                                
+                                methods.append({
+                                    'name': method_name,
+                                    'params': params,
+                                    'params_detailed': params_detailed,
+                                    'return_type': return_type,
+                                    'args': [p['name'] for p in params]
+                                })
+                            
+                            elif item.type == 'field_declaration':
+                                for child in item.children:
+                                    if child.type == 'variable_declarator':
+                                        attr_name_node = child.child_by_field_name('name')
+                                        if attr_name_node:
+                                            attr_name = content[attr_name_node.start_byte:attr_name_node.end_byte]
+                                            type_node = item.child_by_field_name('type')
+                                            attr_type = 'Object'
+                                            if type_node:
+                                                attr_type = content[type_node.start_byte:type_node.end_byte]
+                                            
+                                            attributes.append({
+                                                'name': attr_name,
+                                                'type': attr_type
+                                            })
+                    
+                    classes.append({
+                        'name': class_name,
+                        'full_name': f"{module_name}.{class_name}",
+                        'methods': methods,
+                        'attributes': attributes
+                    })
+                
+                elif node.type == 'import_declaration':
+                    for child in node.children:
+                        if child.type == 'scoped_identifier' or child.type == 'identifier':
+                            import_name = content[child.start_byte:child.end_byte]
+                            if self._is_likely_internal(import_name, project_modules):
+                                imports.append(import_name)
+            
+            return {
+                'module_name': module_name,
+                'file_path': relative_path,
+                'classes': classes,
+                'functions': functions,
+                'imports': list(set(imports)),
+                'line_count': len(content.splitlines())
+            }
+            
+        except Exception as e:
+            logger.warning(f"Could not analyze {file_path}: {e}")
+            return None
+
+    def _extract_java_parameters(self, method_node, file_content):
+        params = []
+        params_node = method_node.child_by_field_name('parameters')
+        if not params_node:
+            return params
+            
+        for param in params_node.children:
+            if param.type == 'formal_parameter':
+                id_node = param.child_by_field_name('name')
+                type_node = param.child_by_field_name('type')
+                if id_node:
+                    name = file_content[id_node.start_byte:id_node.end_byte]
+                    ptype = 'Object'
+                    if type_node:
+                        ptype = file_content[type_node.start_byte:type_node.end_byte]
+                    
+                    params.append({
+                        'name': name,
+                        'type': ptype,
+                        'kind': 'positional',
+                        'optional': False,
+                        'default': None
+                    })
+        return params
+
+class CodeAnalyzerRouter:
+    def __init__(self):
+        self.analyzers = {
+            '.py': PythonTreeSitterAnalyzer(),
+            '.java': JavaTreeSitterAnalyzer()
+        }
+        
+    def analyze_file(self, file_path: Path, repo_root: Path, project_modules: Set[str]) -> Dict[str, Any]:
+        analyzer = self.analyzers.get(file_path.suffix)
+        if analyzer:
+            return analyzer.analyze_file(file_path, repo_root, project_modules)
+        return None
+
 
 class DirectNeo4jExtractor:
     """Creates nodes and relationships directly in Neo4j"""
@@ -383,7 +492,7 @@ class DirectNeo4jExtractor:
         self.neo4j_user = neo4j_user
         self.neo4j_password = neo4j_password
         self.driver = None
-        self.analyzer = Neo4jCodeAnalyzer()
+        self.analyzer = CodeAnalyzerRouter()
     
     async def initialize(self):
         """Initialize Neo4j connection"""
@@ -487,27 +596,6 @@ class DirectNeo4jExtractor:
         logger.info("Repository cloned successfully")
         return target_dir
     
-    def get_python_files(self, repo_path: str) -> List[Path]:
-        """Get Python files, focusing on main source directories"""
-        python_files = []
-        exclude_dirs = {
-            'tests', 'test', '__pycache__', '.git', 'venv', 'env',
-            'node_modules', 'build', 'dist', '.pytest_cache', 'docs',
-            'examples', 'example', 'demo', 'benchmark'
-        }
-        
-        for root, dirs, files in os.walk(repo_path):
-            dirs[:] = [d for d in dirs if d not in exclude_dirs and not d.startswith('.')]
-            
-            for file in files:
-                if file.endswith('.py') and not file.startswith('test_'):
-                    file_path = Path(root) / file
-                    if (file_path.stat().st_size < 500_000 and 
-                        file not in ['setup.py', 'conftest.py']):
-                        python_files.append(file_path)
-        
-        return python_files
-    
     async def analyze_repository(self, repo_url: str, temp_dir: str = None):
         """Analyze repository and create nodes/relationships in Neo4j"""
         repo_name = repo_url.split('/')[-1].replace('.git', '')
@@ -525,29 +613,48 @@ class DirectNeo4jExtractor:
         repo_path = Path(self.clone_repo(repo_url, temp_dir))
         
         try:
-            logger.info("Getting Python files...")
-            python_files = self.get_python_files(str(repo_path))
-            logger.info(f"Found {len(python_files)} Python files to analyze")
+            logger.info("Getting source files...")
+            # Collect all relevant source files
+            extensions = {'.py', '.java'} # Add more extensions as analyzers are added
+            source_files = []
+            exclude_dirs = {
+                'tests', 'test', '__pycache__', '.git', 'venv', 'env',
+                'node_modules', 'build', 'dist', '.pytest_cache', 'docs',
+                'examples', 'example', 'demo', 'benchmark'
+            }
             
-            # First pass: identify project modules
+            for root, dirs, files in os.walk(repo_path):
+                dirs[:] = [d for d in dirs if d not in exclude_dirs and not d.startswith('.')]
+                
+                for file in files:
+                    file_path = Path(root) / file
+                    if file_path.suffix in extensions:
+                        # Basic size check to avoid huge files
+                        if file_path.stat().st_size < 500_000:
+                            source_files.append(file_path)
+            
+            logger.info(f"Found {len(source_files)} files to analyze")
+            
+            # First pass: identify project modules (for Python, Java, etc.)
             logger.info("Identifying project modules...")
             project_modules = set()
-            for file_path in python_files:
+            for file_path in source_files:
                 relative_path = str(file_path.relative_to(repo_path))
-                module_parts = relative_path.replace('/', '.').replace('.py', '').split('.')
+                # This logic is Python-centric, might need refinement for other languages
+                module_parts = relative_path.replace('/', '.').replace(file_path.suffix, '').split('.')
                 if len(module_parts) > 0 and not module_parts[0].startswith('.'):
                     project_modules.add(module_parts[0])
             
             logger.info(f"Identified project modules: {sorted(project_modules)}")
             
             # Second pass: analyze files and collect data
-            logger.info("Analyzing Python files...")
+            logger.info("Analyzing source files...")
             modules_data = []
-            for i, file_path in enumerate(python_files):
+            for i, file_path in enumerate(source_files):
                 if i % 20 == 0:
-                    logger.info(f"Analyzing file {i+1}/{len(python_files)}: {file_path.name}")
+                    logger.info(f"Analyzing file {i+1}/{len(source_files)}: {file_path.name}")
                 
-                analysis = self.analyzer.analyze_python_file(file_path, repo_path, project_modules)
+                analysis = self.analyzer.analyze_file(file_path, repo_path, project_modules)
                 if analysis:
                     modules_data.append(analysis)
             
