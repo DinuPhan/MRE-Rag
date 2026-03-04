@@ -1,80 +1,75 @@
+#!/usr/bin/env python3
+"""
+Custom script to parse the imgscalr repository and query for Chris Campbell's algorithm.
+"""
+
 import asyncio
 import os
 import sys
-from pathlib import Path
+from dotenv import load_dotenv
 
-# Add src to Python path
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+# Ensure we can import from src
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from knowledge_graphs.parse_repo_into_neo4j import DirectNeo4jExtractor
+from src.knowledge_graphs.parse_repo_into_neo4j import DirectNeo4jExtractor
 
 async def main():
-    # Keep it safe inside test scope
-    NEO4J_URI = os.getenv("NEO4J_URI", "bolt://neo4j:7687")
-    NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
-    NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
-
-    print(f"Connecting to Neo4j at {NEO4J_URI}...")
-    extractor = DirectNeo4jExtractor(NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD)
+    load_dotenv()
+    
+    neo4j_uri = os.environ.get('NEO4J_URI', 'bolt://neo4j:7687')
+    neo4j_user = os.environ.get('NEO4J_USER', 'neo4j')
+    neo4j_password = os.environ.get('NEO4J_PASSWORD', 'password')
+    
+    extractor = DirectNeo4jExtractor(neo4j_uri, neo4j_user, neo4j_password)
     
     try:
         await extractor.initialize()
         
-        # Point right at the dummy java repo
-        dummy_repo_path = Path(__file__).parent / "dummy_java"
-        repo_name = "test-dummy-java"
+        # Analyze the imgscalr repository
+        repo_url = "https://github.com/rkalla/imgscalr.git"
+        print(f"\\n--- Parsing Repository: {repo_url} ---")
+        await extractor.analyze_repository(repo_url)
         
-        print(f"\n=== Analyzing Java repository: {dummy_repo_path} ===")
-        
-        # Override standard parsing to just hit the local directory
-        # Collect all relevant source files
-        extensions = {'.java'}
-        source_files = []
-        for file_path in dummy_repo_path.rglob('*'):
-            if file_path.suffix in extensions:
-                source_files.append(file_path)
-                
-        # Manually extract just the Java test data
-        modules_data = []
-        for file_path in source_files:
-            analysis = extractor.analyzer.analyze_file(file_path, dummy_repo_path, set())
-            if analysis:
-                modules_data.append(analysis)
-        
-        # Create Neo4j mappings
-        await extractor._create_graph(repo_name, modules_data)
-        
-        # Print results directly from graph query
+        # Now query for Chris Campbell's incremental scaling algorithm
+        print("\\n--- Querying for Chris Campbell's algorithm ---")
         async with extractor.driver.session() as session:
-            print(f"\n=== Verifying Neo4j Java Data ===")
+            # We want to search for 'increment' in methods
+            query = """
+            MATCH (m:Method)
+            WHERE toLower(m.name) CONTAINS 'increment' OR toLower(m.name) CONTAINS 'campbell'
+            RETURN m.name as method_name, m.full_name as full_name, m.args as args, m.return_type as return_type
+            """
+            result = await session.run(query)
             
-            # Check for our DummyJavaService class
-            result = await session.run(
-                "MATCH (c:Class {name: 'DummyJavaService'}) RETURN c.full_name AS full_name"
-            )
-            records = [record async for record in result]
-            print(f"Classes found in Neo4j matching 'DummyJavaService': {len(records)}")
+            records = [dict(record) async for record in result]
             
-            # Print methods attached to it
-            result = await session.run(
-                "MATCH (c:Class {name: 'DummyJavaService'})-[:HAS_METHOD]->(m:Method) "
-                "RETURN m.name AS name"
-            )
-            methods = [record["name"] async for record in result]
-            print(f"\nMethods found inside Neo4j for DummyJavaService: {len(methods)}")
-            for m in sorted(methods):
-                print(f"- {m}()")
+            if records:
+                print("Found relevant methods:")
+                for r in records:
+                    print(f" - {r['full_name']}({', '.join(r['args'])}): {r['return_type']}")
+            else:
+                print("No structurally matching methods found based on name ('increment' or 'campbell').")
                 
-            print("\n✅ Java integration extraction test successfully mapped to schema.")
+                # Check for attributes
+                attr_query = """
+                MATCH (a:Attribute)
+                WHERE toLower(a.name) CONTAINS 'increment' OR toLower(a.name) CONTAINS 'campbell'
+                RETURN a.name as attr_name, a.full_name as full_name
+                """
+                attr_result = await session.run(attr_query)
+                attr_records = [dict(r) async for r in attr_result]
                 
-    except Exception as e:
-        print(f"\n❌ Error during execution: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+                if attr_records:
+                    print("Found relevant attributes:")
+                    for a in attr_records:
+                        print(f" - {a['full_name']}")
+                else:
+                    print("No attributes or methods found containing 'increment' or 'campbell'. Note that structural parsing does not include comments.")
+                    
+            print("\\n--- End of Execution ---")
+            
     finally:
-        if extractor.driver:
-            await extractor.driver.close()
+        await extractor.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
