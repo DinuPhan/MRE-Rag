@@ -573,44 +573,165 @@ class DirectNeo4jExtractor:
         if self.driver:
             await self.driver.close()
     
-    def clone_repo(self, repo_url: str, target_dir: str) -> str:
-        """Clone repository with shallow clone"""
-        logger.info(f"Cloning repository to: {target_dir}")
+    async def get_last_parsed_commit(self, repo_name: str) -> str:
+        """Get the last parsed commit hash for a repository"""
+        async with self.driver.session() as session:
+            result = await session.run(
+                "MATCH (r:Repository {name: $repo_name}) RETURN r.last_commit_hash AS hash",
+                repo_name=repo_name
+            )
+            record = await result.single()
+            return record["hash"] if record and record.get("hash") else None
+
+    async def update_repo_commit(self, repo_name: str, commit_hash: str):
+        """Update the last parsed commit hash"""
+        async with self.driver.session() as session:
+            await session.run(
+                "MATCH (r:Repository {name: $repo_name}) SET r.last_commit_hash = $hash",
+                repo_name=repo_name, hash=commit_hash
+            )
+
+    async def clear_file_data(self, file_path: str):
+        """Clear all classes, methods, and functions defined in a specific file"""
+        logger.info(f"Pruning nodes for modified/deleted file: {file_path}")
+        async with self.driver.session() as session:
+            # 1. Delete methods and attributes (they depend on classes defined in this file)
+            await session.run("""
+                MATCH (f:File {path: $file_path})-[:DEFINES]->(c:Class)-[:HAS_METHOD]->(m:Method)
+                DETACH DELETE m
+            """, file_path=file_path)
+            
+            await session.run("""
+                MATCH (f:File {path: $file_path})-[:DEFINES]->(c:Class)-[:HAS_ATTRIBUTE]->(a:Attribute)
+                DETACH DELETE a
+            """, file_path=file_path)
+            
+            # 2. Delete functions
+            await session.run("""
+                MATCH (f:File {path: $file_path})-[:DEFINES]->(func:Function)
+                DETACH DELETE func
+            """, file_path=file_path)
+            
+            # 3. Delete classes
+            await session.run("""
+                MATCH (f:File {path: $file_path})-[:DEFINES]->(c:Class)
+                DETACH DELETE c
+            """, file_path=file_path)
+            
+            # 4. Delete the file itself
+            await session.run("""
+                MATCH (f:File {path: $file_path})
+                DETACH DELETE f
+            """, file_path=file_path)
+
+    def checkout_repo(self, repo_url: str, target_dir: str) -> tuple[str, str]:
+        """Clone or update repository and return the target dir and HEAD commit hash"""
+        logger.info(f"Checking out repository to: {target_dir}")
         if os.path.exists(target_dir):
-            logger.info(f"Removing existing directory: {target_dir}")
+            logger.info(f"Repository exists. Restoring and pulling latest changes in {target_dir}")
             try:
-                def handle_remove_readonly(func, path, exc):
-                    try:
-                        if os.path.exists(path):
-                            os.chmod(path, 0o777)
-                            func(path)
-                    except PermissionError:
-                        logger.warning(f"Could not remove {path} - file in use, skipping")
-                        pass
-                shutil.rmtree(target_dir, onerror=handle_remove_readonly)
-            except Exception as e:
-                logger.warning(f"Could not fully remove {target_dir}: {e}. Proceeding anyway...")
+                subprocess.run(['git', '-C', target_dir, 'reset', '--hard'], check=True, capture_output=True)
+                subprocess.run(['git', '-C', target_dir, 'clean', '-fd'], check=True, capture_output=True)
+                subprocess.run(['git', '-C', target_dir, 'pull'], check=True, capture_output=True)
+            except subprocess.CalledProcessError as e:
+                logger.warning(f"Git pull failed: {e}. Falling back to clean clone.")
+                import shutil
+                shutil.rmtree(target_dir, ignore_errors=True)
+                subprocess.run(['git', 'clone', repo_url, target_dir], check=True, capture_output=True)
+        else:
+            logger.info(f"Running git clone from {repo_url}")
+            subprocess.run(['git', 'clone', repo_url, target_dir], check=True, capture_output=True)
         
-        logger.info(f"Running git clone from {repo_url}")
-        subprocess.run(['git', 'clone', '--depth', '1', repo_url, target_dir], check=True)
-        logger.info("Repository cloned successfully")
-        return target_dir
+        # Get HEAD commit hash
+        result = subprocess.run(['git', '-C', target_dir, 'rev-parse', 'HEAD'], 
+                                capture_output=True, text=True, check=True)
+        logger.info("Repository checked out successfully")
+        return target_dir, result.stdout.strip()
+        
+    def get_git_diff(self, target_dir: str, old_commit: str, new_commit: str) -> Dict[str, List[str]]:
+        """Get Added, Modified, and Deleted files between commits relative to the repo root"""
+        logger.info(f"Computing diff from {old_commit} to {new_commit}")
+        
+        result = subprocess.run(
+            ['git', '-C', target_dir, 'diff', '--name-status', old_commit, new_commit],
+            capture_output=True, text=True, check=True
+        )
+        
+        diff = {'A': [], 'M': [], 'D': []}
+        for line in result.stdout.splitlines():
+            if not line: continue
+            parts = line.split('\t')
+            if len(parts) >= 2:
+                status = parts[0][0]  # Just taking the first char (A, M, D, R, etc)
+                rel_path = parts[1]
+                
+                if status == 'R':
+                    diff['A'].append(parts[2])
+                    diff['D'].append(rel_path)
+                elif status in ('A', 'C'):
+                    diff['A'].append(rel_path)
+                elif status == 'M':
+                    diff['M'].append(rel_path)
+                elif status == 'D':
+                    diff['D'].append(rel_path)
+                        
+        return diff
     
-    async def analyze_repository(self, repo_url: str, temp_dir: str = None):
+    async def analyze_repository(self, repo_url: str, temp_dir: str = None, incremental: bool = None, force_full: bool = False):
         """Analyze repository and create nodes/relationships in Neo4j"""
         repo_name = repo_url.split('/')[-1].replace('.git', '')
         logger.info(f"Analyzing repository: {repo_name}")
         
-        # Clear existing data for this repository before re-processing
-        await self.clear_repository_data(repo_name)
+        # Resolve strategy
+        if incremental is None:
+            strategy = os.environ.get('NEO4J_INDEXING_STRATEGY', 'INCREMENTAL').upper()
+            incremental = strategy == 'INCREMENTAL'
+            
+        if force_full:
+            incremental = False
         
         # Set default temp_dir to repos folder at script level
         if temp_dir is None:
             script_dir = Path(__file__).parent
             temp_dir = str(script_dir / "repos" / repo_name)
         
-        # Clone and analyze
-        repo_path = Path(self.clone_repo(repo_url, temp_dir))
+        # Checkout and get commit
+        repo_path_str, current_commit = self.checkout_repo(repo_url, temp_dir)
+        repo_path = Path(repo_path_str)
+        
+        incremental_mode_active = False
+        files_to_analyze_paths = set()
+        
+        if incremental:
+            last_commit = await self.get_last_parsed_commit(repo_name)
+            if last_commit == current_commit:
+                logger.info(f"Repository {repo_name} is already up to date at commit {current_commit}. Skipping.")
+                return
+                
+            if last_commit:
+                logger.info(f"Incremental sync: comparing {last_commit} -> {current_commit}")
+                try:
+                    diffs = self.get_git_diff(temp_dir, last_commit, current_commit)
+                    
+                    # Process deletions and modifications
+                    for rel_path in diffs['D'] + diffs['M']:
+                        absolute_path = str(repo_path / rel_path)
+                        await self.clear_file_data(absolute_path)
+                        
+                    # Target additions and modifications for parsing
+                    for rel_path in diffs['A'] + diffs['M']:
+                        absolute_path = repo_path / rel_path
+                        files_to_analyze_paths.add(str(absolute_path))
+                        
+                    incremental_mode_active = True
+                    logger.info(f"Incremental diff: {len(diffs['A'])} Added, {len(diffs['M'])} Modified, {len(diffs['D'])} Deleted")
+                except Exception as e:
+                    logger.warning(f"Failed to compute git diff: {e}. Falling back to full indexing.")
+                    incremental_mode_active = False
+                    
+        # Clear existing data for this repository if not incremental
+        if not incremental_mode_active:
+            await self.clear_repository_data(repo_name)
         
         try:
             logger.info("Getting source files...")
@@ -623,17 +744,29 @@ class DirectNeo4jExtractor:
                 'examples', 'example', 'demo', 'benchmark'
             }
             
-            for root, dirs, files in os.walk(repo_path):
-                dirs[:] = [d for d in dirs if d not in exclude_dirs and not d.startswith('.')]
-                
-                for file in files:
-                    file_path = Path(root) / file
-                    if file_path.suffix in extensions:
-                        # Basic size check to avoid huge files
+            if incremental_mode_active:
+                for f_path_str in files_to_analyze_paths:
+                    file_path = Path(f_path_str)
+                    if file_path.exists() and file_path.suffix in extensions:
                         if file_path.stat().st_size < 500_000:
                             source_files.append(file_path)
+            else:
+                for root, dirs, files in os.walk(repo_path):
+                    dirs[:] = [d for d in dirs if d not in exclude_dirs and not d.startswith('.')]
+                    
+                    for file in files:
+                        file_path = Path(root) / file
+                        if file_path.suffix in extensions:
+                            # Basic size check to avoid huge files
+                            if file_path.stat().st_size < 500_000:
+                                source_files.append(file_path)
             
             logger.info(f"Found {len(source_files)} files to analyze")
+            
+            if not source_files and incremental_mode_active:
+                logger.info("No relevant files modified. Updating commit hash and completing.")
+                await self.update_repo_commit(repo_name, current_commit)
+                return
             
             # First pass: identify project modules (for Python, Java, etc.)
             logger.info("Identifying project modules...")
@@ -658,45 +791,31 @@ class DirectNeo4jExtractor:
                 if analysis:
                     modules_data.append(analysis)
             
-            logger.info(f"Found {len(modules_data)} files with content")
+            logger.info(f"Found {len(modules_data)} files with content to index")
             
             # Create nodes and relationships in Neo4j
-            logger.info("Creating nodes and relationships in Neo4j...")
-            await self._create_graph(repo_name, modules_data)
+            if modules_data:
+                logger.info("Creating nodes and relationships in Neo4j...")
+                await self._create_graph(repo_name, modules_data)
+                
+                # Print summary
+                total_classes = sum(len(mod['classes']) for mod in modules_data)
+                total_methods = sum(len(cls['methods']) for mod in modules_data for cls in mod['classes'])
+                total_functions = sum(len(mod['functions']) for mod in modules_data)
+                total_imports = sum(len(mod['imports']) for mod in modules_data)
+                
+                print(f"\n=== Direct Neo4j Repository Analysis for {repo_name} ===")
+                print(f"Files processed: {len(modules_data)}")
+                print(f"Classes created: {total_classes}")
+                print(f"Methods created: {total_methods}")
+                print(f"Functions created: {total_functions}")
+                print(f"Import relationships: {total_imports}")
             
-            # Print summary
-            total_classes = sum(len(mod['classes']) for mod in modules_data)
-            total_methods = sum(len(cls['methods']) for mod in modules_data for cls in mod['classes'])
-            total_functions = sum(len(mod['functions']) for mod in modules_data)
-            total_imports = sum(len(mod['imports']) for mod in modules_data)
-            
-            print(f"\\n=== Direct Neo4j Repository Analysis for {repo_name} ===")
-            print(f"Files processed: {len(modules_data)}")
-            print(f"Classes created: {total_classes}")
-            print(f"Methods created: {total_methods}")
-            print(f"Functions created: {total_functions}")
-            print(f"Import relationships: {total_imports}")
-            
-            logger.info(f"Successfully created Neo4j graph for {repo_name}")
+            await self.update_repo_commit(repo_name, current_commit)
+            logger.info(f"Successfully updated Neo4j graph for {repo_name} to {current_commit}")
             
         finally:
-            if os.path.exists(temp_dir):
-                logger.info(f"Cleaning up temporary directory: {temp_dir}")
-                try:
-                    def handle_remove_readonly(func, path, exc):
-                        try:
-                            if os.path.exists(path):
-                                os.chmod(path, 0o777)
-                                func(path)
-                        except PermissionError:
-                            logger.warning(f"Could not remove {path} - file in use, skipping")
-                            pass
-                    
-                    shutil.rmtree(temp_dir, onerror=handle_remove_readonly)
-                    logger.info("Cleanup completed")
-                except Exception as e:
-                    logger.warning(f"Cleanup failed: {e}. Directory may remain at {temp_dir}")
-                    # Don't fail the whole process due to cleanup issues
+            pass # We purposefully keep the temp directory for subsequent incremental diffs
     
     async def _create_graph(self, repo_name: str, modules_data: List[Dict]):
         """Create all nodes and relationships in Neo4j"""

@@ -64,5 +64,12 @@ To verify the Neo4j knowledge graph integration, which uses `tree-sitter` for ro
    ```
    This script will connect to Neo4j, create necessary nodes (Repository, File, Class, Method, Function, Attribute) and relationships (CONTAINS, DEFINES, HAS_METHOD, CALLS, IMPORTS), and finally run a verification query to ensure the data is properly structured.
 
+3. **Test Arbitrary Cypher Queries:**
+   Run the quick text query script to rapidly test your Neo4j graphs using Cypher strings as arguments:
+   ```bash
+   docker exec mre_rag-app-1 python3 /app/tests/test_neo4j_query.py "MATCH (n) RETURN count(n) AS node_count"
+   ```
+   This script executes standard Cypher queries against the connected Bolt port and prints the tabular records returned.
+
 ---
 *Note: While scripts like `test_chunker.py` and `test_db.py` can technically be run locally safely, executing them uniformly through the Docker container guarantees zero environment or dependency mismatch warnings.*
