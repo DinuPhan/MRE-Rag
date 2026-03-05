@@ -12,10 +12,16 @@ from dataclasses import dataclass, field
 from enum import Enum
 from neo4j import AsyncGraphDatabase
 
-from ai_script_analyzer import (
-    AnalysisResult, ImportInfo, MethodCall, AttributeAccess, 
-    FunctionCall, ClassInstantiation
-)
+try:
+    from ai_script_analyzer import (
+        AnalysisResult, ImportInfo, MethodCall, AttributeAccess, 
+        FunctionCall, ClassInstantiation
+    )
+except ImportError:
+    from knowledge_graphs.ai_script_analyzer import (
+        AnalysisResult, ImportInfo, MethodCall, AttributeAccess, 
+        FunctionCall, ClassInstantiation
+    )
 
 logger = logging.getLogger(__name__)
 

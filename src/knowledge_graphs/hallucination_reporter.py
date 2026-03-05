@@ -11,9 +11,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
-from knowledge_graph_validator import (
-    ScriptValidationResult, ValidationStatus, ValidationResult
-)
+try:
+    from knowledge_graph_validator import (
+        ScriptValidationResult, ValidationStatus, ValidationResult
+    )
+except ImportError:
+    from knowledge_graphs.knowledge_graph_validator import (
+        ScriptValidationResult, ValidationStatus, ValidationResult
+    )
 
 logger = logging.getLogger(__name__)
 
