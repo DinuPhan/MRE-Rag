@@ -292,7 +292,7 @@ Examples:
     neo4j_user = args.neo4j_user or os.environ.get('NEO4J_USER', 'neo4j')
     neo4j_password = args.neo4j_password or os.environ.get('NEO4J_PASSWORD', 'password')
     
-    if not neo4j_password or neo4j_password == 'password':
+    if not neo4j_password:
         logger.error("Please set NEO4J_PASSWORD environment variable or use --neo4j-password")
         sys.exit(1)
     

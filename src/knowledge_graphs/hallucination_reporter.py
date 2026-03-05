@@ -392,13 +392,14 @@ class HallucinationReporter:
         
         # Summary
         summary = report['validation_summary']
+        total = max(1, summary['total_validations'])
         md.append("## Summary")
         md.append("")
         md.append(f"- **Total Validations:** {summary['total_validations']}")
-        md.append(f"- **Valid:** {summary['valid_count']} ({summary['valid_count']/summary['total_validations']:.1%})")
-        md.append(f"- **Invalid:** {summary['invalid_count']} ({summary['invalid_count']/summary['total_validations']:.1%})")
-        md.append(f"- **Not Found:** {summary['not_found_count']} ({summary['not_found_count']/summary['total_validations']:.1%})")
-        md.append(f"- **Uncertain:** {summary['uncertain_count']} ({summary['uncertain_count']/summary['total_validations']:.1%})")
+        md.append(f"- **Valid:** {summary['valid_count']} ({summary['valid_count']/total:.1%})")
+        md.append(f"- **Invalid:** {summary['invalid_count']} ({summary['invalid_count']/total:.1%})")
+        md.append(f"- **Not Found:** {summary['not_found_count']} ({summary['not_found_count']/total:.1%})")
+        md.append(f"- **Uncertain:** {summary['uncertain_count']} ({summary['uncertain_count']/total:.1%})")
         md.append(f"- **Hallucination Rate:** {summary['hallucination_rate']:.1%}")
         md.append("")
         

@@ -71,5 +71,12 @@ To verify the Neo4j knowledge graph integration, which uses `tree-sitter` for ro
    ```
    This script executes standard Cypher queries against the connected Bolt port and prints the tabular records returned.
 
+4. **Test AI Hallucination Detection:**
+   Run the AI Hallucination Detector test to parse a mock script with tree-sitter and cross-reference its structural imports and classes against the Neo4j Knowledge Graph:
+   ```bash
+   docker exec mre_rag-app-1 python3 /app/tests/test_ai_hallucination.py
+   ```
+   This script outputs a robust Markdown and JSON validation report detailing any hallucinated elements.
+
 ---
 *Note: While scripts like `test_chunker.py` and `test_db.py` can technically be run locally safely, executing them uniformly through the Docker container guarantees zero environment or dependency mismatch warnings.*
