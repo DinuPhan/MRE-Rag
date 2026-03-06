@@ -85,7 +85,12 @@ class AnalysisResult:
     errors: List[str] = field(default_factory=list)
 
 
-class AIScriptAnalyzer:
+class BaseScriptAnalyzer:
+    def analyze_script(self, script_path: str) -> AnalysisResult:
+        raise NotImplementedError
+
+
+class PythonScriptAnalyzer(BaseScriptAnalyzer):
     """Analyzes AI-generated Python scripts for validation against knowledge graph using Tree-sitter"""
     
     def __init__(self):
@@ -444,6 +449,152 @@ class AIScriptAnalyzer:
             class_patterns = ['Model', 'Provider', 'Client', 'Agent', 'Manager', 'Handler', 'Builder', 'Factory', 'Service', 'Controller', 'Processor']
             return any(pattern in full_name for pattern in class_patterns)
         return False
+
+
+class JavaScriptAnalyzer(BaseScriptAnalyzer):
+    """Analyzes AI-generated Java scripts using Tree-sitter"""
+    
+    def __init__(self):
+        self.import_map: Dict[str, str] = {}
+        self.variable_types: Dict[str, str] = {}
+        
+        import tree_sitter_java
+        self.language = Language(tree_sitter_java.language())
+        self.parser = Parser(self.language)
+
+    def analyze_script(self, script_path: str) -> AnalysisResult:
+        try:
+            with open(script_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            self.content_bytes = bytes(content, "utf8")
+            tree = self.parser.parse(self.content_bytes)
+            result = AnalysisResult(file_path=script_path)
+            
+            self.import_map.clear()
+            self.variable_types.clear()
+            
+            def walk_nodes(node):
+                yield node
+                for child in node.children:
+                    yield from walk_nodes(child)
+                    
+            for node in walk_nodes(tree.root_node):
+                line_num = node.start_point[0] + 1
+                
+                if node.type == 'import_declaration':
+                    for child in node.children:
+                        if child.type in ('scoped_identifier', 'identifier'):
+                            import_name = self._get_text(child)
+                            simple_name = import_name.split('.')[-1]
+                            result.imports.append(ImportInfo(
+                                module=import_name, name=simple_name, alias=None,
+                                is_from_import=False, line_number=line_num
+                            ))
+                            self.import_map[simple_name] = import_name
+                            
+                elif node.type == 'object_creation_expression':
+                    type_node = node.child_by_field_name('type')
+                    if type_node:
+                        class_name = self._get_text(type_node)
+                        full_class_name = self.import_map.get(class_name, class_name)
+                        
+                        var_name = f"<anonymous_{class_name}>"
+                        parent = node.parent
+                        if parent and parent.type == 'variable_declarator':
+                            name_node = parent.child_by_field_name('name')
+                            if name_node:
+                                var_name = self._get_text(name_node)
+                                self.variable_types[var_name] = full_class_name
+                        elif parent and parent.type == 'assignment_expression':
+                            left_node = parent.child_by_field_name('left')
+                            if left_node:
+                                var_name = self._get_text(left_node)
+                                self.variable_types[var_name] = full_class_name
+
+                        args = self._extract_java_args(node)
+                        result.class_instantiations.append(ClassInstantiation(
+                            variable_name=var_name, class_name=class_name,
+                            args=args, kwargs={}, line_number=line_num,
+                            full_class_name=full_class_name
+                        ))
+                        
+                elif node.type == 'method_invocation':
+                    obj_node = node.child_by_field_name('object')
+                    name_node = node.child_by_field_name('name')
+                    
+                    if obj_node and name_node:
+                        obj_name = self._get_text(obj_node)
+                        method_name = self._get_text(name_node)
+                        if obj_name and obj_name[0].isupper():
+                            full_name = self.import_map.get(obj_name, obj_name)
+                            result.function_calls.append(FunctionCall(
+                                function_name=method_name, args=self._extract_java_args(node),
+                                kwargs={}, line_number=line_num, full_name=f"{full_name}.{method_name}"
+                            ))
+                        else:
+                            result.method_calls.append(MethodCall(
+                                object_name=obj_name, method_name=method_name,
+                                args=self._extract_java_args(node), kwargs={},
+                                line_number=line_num, object_type=self.variable_types.get(obj_name)
+                            ))
+                    elif name_node:
+                         method_name = self._get_text(name_node)
+                         result.function_calls.append(FunctionCall(
+                                function_name=method_name, args=self._extract_java_args(node),
+                                kwargs={}, line_number=line_num, full_name=method_name
+                            ))
+                         
+                elif node.type == 'field_access':
+                    obj_node = node.child_by_field_name('object')
+                    field_node = node.child_by_field_name('field')
+                    if obj_node and field_node:
+                        obj_name = self._get_text(obj_node)
+                        attr_name = self._get_text(field_node)
+                        result.attribute_accesses.append(AttributeAccess(
+                            object_name=obj_name, attribute_name=attr_name,
+                            line_number=line_num, object_type=self.variable_types.get(obj_name)
+                        ))
+
+            result.variable_types = self.variable_types.copy()
+            return result
+        except Exception as e:
+            error_msg = f"Failed to analyze script {script_path}: {str(e)}"
+            logger.error(error_msg)
+            result = AnalysisResult(file_path=script_path)
+            result.errors.append(error_msg)
+            return result
+
+    def _get_text(self, node) -> str:
+        if not node: return ""
+        return self.content_bytes[node.start_byte:node.end_byte].decode("utf8")
+        
+    def _extract_java_args(self, call_node) -> List[str]:
+        args = []
+        args_node = call_node.child_by_field_name('arguments')
+        if args_node:
+            for arg in args_node.children:
+                if arg.type not in ('(', ')', ','):
+                    args.append(self._get_text(arg))
+        return args
+
+
+class AIScriptAnalyzer:
+    """Router for language-specific script analyzers"""
+    
+    def __init__(self):
+        self.analyzers = {
+            '.py': PythonScriptAnalyzer(),
+            '.java': JavaScriptAnalyzer()
+        }
+        
+    def analyze_script(self, script_path: str) -> AnalysisResult:
+        ext = Path(script_path).suffix.lower()
+        analyzer = self.analyzers.get(ext)
+        if not analyzer:
+            result = AnalysisResult(file_path=script_path)
+            result.errors.append(f"Unsupported script language: {ext}")
+            return result
+        return analyzer.analyze_script(script_path)
 
 
 def analyze_ai_script(script_path: str) -> AnalysisResult:

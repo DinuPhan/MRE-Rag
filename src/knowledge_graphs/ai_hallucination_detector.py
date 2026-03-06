@@ -1,7 +1,7 @@
 """
 AI Hallucination Detector
 
-Main orchestrator for detecting AI coding assistant hallucinations in Python scripts.
+Main orchestrator for detecting AI coding assistant hallucinations in Python and Java scripts.
 Combines AST analysis, knowledge graph validation, and comprehensive reporting.
 """
 
@@ -59,7 +59,7 @@ class AIHallucinationDetector:
         Main detection function that analyzes a script and generates reports
         
         Args:
-            script_path: Path to the AI-generated Python script
+            script_path: Path to the AI-generated Python or Java script
             output_dir: Directory to save reports (defaults to script directory)
             save_json: Whether to save JSON report
             save_markdown: Whether to save Markdown report
@@ -74,8 +74,8 @@ class AIHallucinationDetector:
         if not os.path.exists(script_path):
             raise FileNotFoundError(f"Script not found: {script_path}")
         
-        if not script_path.endswith('.py'):
-            raise ValueError("Only Python (.py) files are supported")
+        if not script_path.endswith(('.py', '.java')):
+            raise ValueError("Only Python (.py) and Java (.java) files are supported")
         
         # Set output directory
         if output_dir is None:
@@ -135,7 +135,7 @@ class AIHallucinationDetector:
         Detect hallucinations in multiple scripts
         
         Args:
-            script_paths: List of paths to Python scripts
+            script_paths: List of paths to Python or Java scripts
             output_dir: Directory to save all reports
         
         Returns:
@@ -209,7 +209,7 @@ class AIHallucinationDetector:
 async def main():
     """Command-line interface for the AI Hallucination Detector"""
     parser = argparse.ArgumentParser(
-        description="Detect AI coding assistant hallucinations in Python scripts",
+        description="Detect AI coding assistant hallucinations in Python and Java scripts",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -230,7 +230,7 @@ Examples:
     parser.add_argument(
         'scripts',
         nargs='+',
-        help='Python script(s) to analyze for hallucinations'
+        help='Python or Java script(s) to analyze for hallucinations'
     )
     
     parser.add_argument(
