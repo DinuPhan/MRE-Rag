@@ -5,21 +5,21 @@ A ready-to-use containerized web crawling and Retrieval-Augmented Generation (RA
 ## Overview
 
 This project provides a complete, easy-to-deploy backend that can:
-1. Crawl websites and extract clean markdown utilizing `crawl4ai` and Playwright.
-2. Store the raw extracted text as `.txt` files locally for external consumption.
-3. Chunk the content and compute embeddings using multiple supported providers (Google Gemini, OpenAI-compatible APIs, or custom In-House endpoints).
-4. Store these embeddings in a local Qdrant vector database (dynamically adapting to the provider's vector dimensionality).
-5. Provide a semantic search endpoint to query the ingested knowledge base.
-6. Serve as an active Model Context Protocol (MCP) server.
+1. Crawl websites and extract clean markdown using `crawl4ai` and Playwright.
+2. Store the raw extracted text as `.txt` files locally for later use.
+3. Split the text into smaller pieces and convert them into search-friendly formats (embeddings) using Google Gemini, OpenAI, or your own custom models.
+4. Save the search data locally in a Qdrant database, safely isolating general text and code snippets into dedicated collections for better search results.
+5. Offer a smart search API to ask questions about the saved information based on meaning rather than exact keywords.
+6. Act as a server that AI assistants can connect to (Model Context Protocol).
 
 ## Architecture & Tech Stack
 
 - **FastAPI**: Serves the RESTful endpoints (`/crawl` and `/query`).
 - **FastMCP**: Provides the Model Context Protocol tools.
-- **Qdrant**: Vector database running in a dedicated Docker container, persisting data to `./qdrant_storage`.
-- **Text Embeddings**: Abstracted using `httpx` and `google-genai` to swap between Google Gemini, OpenAI `/v1/embeddings`, and custom API endpoints.
-- **crawl4ai & Playwright**: Headless browser automation for high-quality webpage extraction.
-- **Docker Compose**: Orchestrates the FastAPI app and the Qdrant database containers.
+- **Qdrant**: Database running in a dedicated Docker container to store search embeddings, saving data to `./qdrant_storage`.
+- **Text Embeddings**: Handles converting text to embeddings using Google Gemini, OpenAI, and custom API endpoints. It automatically batches requests concurrently to safely speed up data processing.
+- **crawl4ai & Playwright**: Automated invisible browser to load web pages fully and extract high-quality text.
+- **Docker Compose**: Links all the different services (FastAPI, Qdrant, Neo4j) together.
 
 ## Prerequisites
 
@@ -60,9 +60,9 @@ The application will be available at `http://localhost:8051`. Qdrant runs native
 
 ### 1. Ingesting Data (Crawl)
 
-To crawl a webpage, generate embeddings, and store them in Qdrant, send a POST request to the `/crawl` endpoint with the target URL. 
-By default, this crawls only the exact URL. You can use the optional parameters `max_depth` (to recursively follow internal links) and `max_pages` (to limit total documents crawled).
-Furthermore, if you pass a `.xml` sitemap or a `.txt` list of URLs, the crawler will automatically extract and process all links within it.
+To crawl a webpage, convert the text into embeddings (concurrently for fast processing), and save them in Qdrant, send a POST request to the `/crawl` endpoint with the target URL. 
+By default, this crawls only the exact URL. You can use the optional parameters `max_depth` (to follow internal links) and `max_pages` (to limit total pages scanned).
+Also, if you provide a `.xml` sitemap or a `.txt` list of URLs, the crawler will automatically find and process all links inside it.
 
 ```bash
 curl -X POST "http://localhost:8051/crawl" \
@@ -74,9 +74,10 @@ curl -X POST "http://localhost:8051/crawl" \
      }'
 ```
 
-### 2. Semantic Search (Query)
+### 2. Smart RAG Search (Query)
 
-To query the ingested knowledge base, send a POST request covering your search semantics:
+To ask questions against the saved information, send a POST request. The system dynamically detects if your question is related to code, automatically searching the dedicated code snippet collections and adding extra context to improve the results:
+
 
 ```bash
 curl -X POST "http://localhost:8051/query" \
@@ -90,8 +91,8 @@ curl -X POST "http://localhost:8051/query" \
 
 ### 3. Neo4j Knowledge Graph
 
-The Docker Compose stack natively includes a **Neo4j** community container running on port `7687` for hallucination detection and code graph mapping. 
-You can use the bundled `parse_repo_into_neo4j.py` script to clone and map any GitHub repository's structural AST (Classes, Methods, Functions, Imports) directly into the Neo4j database for advanced graph queries.
+The setup includes a **Neo4j** database running on port `7687` to help AI understand code and safely detect if it is making up fake functions (hallucinations). 
+You can use the included `parse_repo_into_neo4j.py` script to map any codebase's structure—like Python or Java Classes, Methods, Functions, and Imports—directly into the Neo4j database to visually explore how the code connects. Our multi-language `CodeAnalyzerRouter` can then check both Python and Java scripts to verify code correctness against the mapped graph.
 
 To test indexing a repository (like this one) via the Docker container:
 
