@@ -154,12 +154,12 @@ class RagPipeline:
             if url:
                 collection_name = QdrantManager.escape_url(url)
                 if code_search:
-                    return self.qdrant.search_code(collection_name, query_vector=query_vector, limit=limit)
+                    return self.qdrant.search_code(collection_name, query_vector=query_vector, limit=limit, query_text=query_text)
                 else:
-                    return self.qdrant.search(collection_name, query_vector=query_vector, limit=limit)
+                    return self.qdrant.search(collection_name, query_vector=query_vector, limit=limit, query_text=query_text)
             else:
                 # search_all currently doesn't natively fork prose vs code, so it searches global default logic
-                return self.qdrant.search_all(query_vector=query_vector, limit=limit)
+                return self.qdrant.search_all(query_vector=query_vector, limit=limit, query_text=query_text)
         except Exception as e:
             print(f"Query Error: {e}")
             return []
