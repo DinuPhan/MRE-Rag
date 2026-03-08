@@ -96,18 +96,20 @@ class OpenAIEmbeddingProvider(BaseEmbeddingProvider):
 
 class InhouseEmbeddingProvider(BaseEmbeddingProvider):
     def __init__(self):
-        self.base_url = os.getenv("INHOUSE_BASE_URL", "http://localhost:8000/api/v1").rstrip("/")
+        self.base_url = os.getenv("INHOUSE_BASE_URL", "http://localhost:8000/api/openai/v1").rstrip("/")
         self.api_key = os.getenv("INHOUSE_API_KEY", "")
-        self._dimension = int(os.getenv("INHOUSE_EMBEDDING_DIMENSION", "768"))
+        self.model_name = os.getenv("INHOUSE_EMBEDDING_MODEL", "in-house-embedding-default")
+        self._dimension = int(os.getenv("INHOUSE_EMBEDDING_DIMENSION", "512"))
 
     @property
     def dimension(self) -> int:
         return self._dimension
 
     def _post_embeddings(self, sentences: list) -> List[List[float]]:
-        # Required format for /api/v1/bi_encoder/encode: {"sentences": [...]}
+        # OpenAI compatible /embeddings payload
         payload = {
-            "sentences": sentences
+            "model": self.model_name,
+            "input": sentences
         }
         
         headers = {"Content-Type": "application/json"}
@@ -115,22 +117,30 @@ class InhouseEmbeddingProvider(BaseEmbeddingProvider):
             headers["Authorization"] = f"Bearer {self.api_key}"
             
         with httpx.Client() as client:
-            response = client.post(f"{self.base_url}/bi_encoder/encode", headers=headers, json=payload, timeout=30.0)
+            response = client.post(f"{self.base_url}/embeddings", headers=headers, json=payload, timeout=30.0)
             response.raise_for_status()
-            return response.json() # Assuming the endpoint returns List[List[float]] directly or adapt as needed
+            data = response.json()
+            
+            # OpenAI compatible response schema parses from {"data": [{"embedding": [...]}]}
+            if "data" in data and isinstance(data["data"], list):
+                # Optionally sort by index if the provider returns them out of order
+                if len(data["data"]) > 0 and "index" in data["data"][0]:
+                    sorted_data = sorted(data["data"], key=lambda x: x.get("index", 0))
+                    return [item["embedding"] for item in sorted_data if "embedding" in item]
+                else:
+                    return [item["embedding"] for item in data["data"] if "embedding" in item]
+            
+            # Fallback for unexpected direct nestings
+            if "embeddings" in data:
+                return data["embeddings"]
+            return data
 
     def create_embedding(self, text: str) -> List[float]:
         result = self._post_embeddings([text])
-        if isinstance(result, dict) and "embeddings" in result:
-             # Graceful handling if they wrapped the list
-             return result["embeddings"][0]
         return result[0]
 
     def create_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
-        result = self._post_embeddings(texts)
-        if isinstance(result, dict) and "embeddings" in result:
-             return result["embeddings"]
-        return result
+        return self._post_embeddings(texts)
 
 
 class EmbeddingManager:

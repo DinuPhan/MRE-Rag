@@ -166,7 +166,7 @@ async def kg_validate_endpoint(request: ValidateScriptRequest):
 # ==========================================
 # 2. FastMCP Setup (Cursor / Windsurf integration)
 # ==========================================
-mcp = FastMCP("mkre-rag-mcp")
+mcp = FastMCP("mre-rag-mcp")
 
 @mcp.tool()
 async def crawl_website(url: str, max_depth: int = 0, max_pages: int = 10) -> str:
