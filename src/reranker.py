@@ -1,6 +1,9 @@
 import os
 from typing import List, Dict, Any
 import httpx
+import logging
+
+logger = logging.getLogger(__name__)
 
 class BaseReranker:
     def rerank(self, query: str, documents: List[str], top_n: int = 5) -> List[int]:
@@ -27,6 +30,7 @@ class InhouseReranker(BaseReranker):
 
     def rerank(self, query: str, documents: List[str], top_n: int = 5) -> List[int]:
         if not documents:
+            logger.debug("InhouseReranker received an empty document array. Skipping execution.")
             return []
 
         # Prepare text_pairs: [ ["query", "doc1"], ["query", "doc2"] ]
@@ -45,6 +49,7 @@ class InhouseReranker(BaseReranker):
 
         try:
             with httpx.Client() as client:
+                logger.debug(f"Firing POST request to: {self.base_url}")
                 response = client.post(
                     self.base_url, 
                     headers=headers, 
@@ -57,9 +62,10 @@ class InhouseReranker(BaseReranker):
                 # Extract scores from the expected schema: {"scores": [... float ...]}
                 if "scores" in data and isinstance(data["scores"], list):
                     scores = data["scores"]
+                    logger.debug(f"Successfully extracted {len(scores)} cross-encoder re-ranking scores.")
                     
                     if len(scores) != len(documents):
-                        print(f"Warning: In-house reranker returned {len(scores)} scores for {len(documents)} documents.")
+                        logger.warning(f"Warning: In-house reranker returned {len(scores)} scores for {len(documents)} documents.")
                     
                     # Pair indices with their scores, sort descending by score
                     scored_indices = [(index, score) for index, score in enumerate(scores)]
@@ -68,11 +74,11 @@ class InhouseReranker(BaseReranker):
                     # Return only the top_n indices
                     return [idx for idx, _ in scored_indices[:top_n]]
                 else:
-                    print(f"Unexpected response format from in-house reranker. Expected 'scores' list. Got: {data}")
+                    logger.warning(f"Unexpected response format from in-house reranker. Expected 'scores' list. Got: {data}")
                     return list(range(len(documents)))[:top_n]
                     
         except Exception as e:
-            print(f"Error executing in-house reranker for query '{query}': {e}")
+            logger.error(f"Error executing in-house reranker for query '{query}': {e}", exc_info=True)
             return list(range(len(documents)))[:top_n]
 
 class RerankerManager:
@@ -83,10 +89,10 @@ class RerankerManager:
         provider_type = os.getenv("RERANKER_PROVIDER", "NONE").upper()
         
         if provider_type == "INHOUSE":
-            print(f"Initializing In-House Reranker Provider at {os.getenv('INHOUSE_RERANKER_BASE_URL')}")
+            logger.info(f"Initializing In-House Reranker Provider at {os.getenv('INHOUSE_RERANKER_BASE_URL')}")
             self._provider = InhouseReranker()
         else:
-            print("No external Reranker provider detected (or set to NONE). Initializing Pass-Through Baseline.")
+            logger.info("No external Reranker provider detected (or set to NONE). Initializing Pass-Through Baseline.")
             self._provider = NoOpReranker()
 
     def rerank(self, query: str, documents: List[str], top_n: int = 5) -> List[int]:
@@ -94,7 +100,8 @@ class RerankerManager:
         Returns the sorted indices of the most relevant documents.
         """
         try:
+            logger.debug(f"Routing Reranker Execution -> {type(self._provider).__name__}")
             return self._provider.rerank(query, documents, top_n)
         except Exception as e:
-            print(f"Reranking error: {e}. Falling back to default order.")
+            logger.error(f"Reranking error: {e}. Falling back to default order.", exc_info=True)
             return list(range(len(documents)))[:top_n]

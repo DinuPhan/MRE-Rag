@@ -59,6 +59,18 @@ class ValidateScriptRequest(BaseModel):
 # ==========================================
 # 1. FastAPI Setup (REST)
 # ==========================================
+import logging
+from rich.logging import RichHandler
+
+log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, log_level, logging.INFO),
+    format="%(message)s",
+    datefmt="[%X]",
+    handlers=[RichHandler(rich_tracebacks=True)]
+)
+logger = logging.getLogger("mre-rag")
+
 app = FastAPI(
     title="MRE RAG Server", 
     description="Qdrant + Gemini Crawl and RAG Pipeline",

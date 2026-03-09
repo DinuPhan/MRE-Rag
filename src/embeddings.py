@@ -3,6 +3,9 @@ from typing import List, Any
 from google import genai
 from dotenv import load_dotenv
 import httpx
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -154,13 +157,13 @@ class EmbeddingManager:
         provider_type = os.getenv("EMBEDDING_PROVIDER", "GEMINI").upper()
         
         if provider_type == "OPENAI":
-            print(f"Initializing OpenAI Embedding Provider at {os.getenv('OPENAI_BASE_URL')}")
+            logger.info(f"Initializing OpenAI Embedding Provider at {os.getenv('OPENAI_BASE_URL')}")
             self._provider = OpenAIEmbeddingProvider()
         elif provider_type == "INHOUSE":
-            print(f"Initializing In-House Embedding Provider at {os.getenv('INHOUSE_BASE_URL')}")
+            logger.info(f"Initializing In-House Embedding Provider at {os.getenv('INHOUSE_BASE_URL')}")
             self._provider = InhouseEmbeddingProvider()
         else:
-            print("Initializing standard Gemini Embedding Provider")
+            logger.info("Initializing standard Gemini Embedding Provider")
             self._provider = GeminiEmbeddingProvider()
 
     @property
@@ -169,9 +172,10 @@ class EmbeddingManager:
 
     def create_embedding(self, text: str) -> List[float]:
         try:
+            logger.debug(f"Requesting single embedding of size {len(text)} chars from {type(self._provider).__name__}")
             return self._provider.create_embedding(text)
         except Exception as e:
-            print(f"Error generating embedding via {type(self._provider).__name__}: {e}")
+            logger.error(f"Error generating embedding via {type(self._provider).__name__}: {e}", exc_info=True)
             raise
 
     def create_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
@@ -180,22 +184,23 @@ class EmbeddingManager:
 
         for retry in range(max_retries):
             try:
+                logger.debug(f"Requesting batch embeddings for {len(texts)} chunks from {type(self._provider).__name__} (Attempt {retry+1})")
                 return self._provider.create_embeddings_batch(texts)
             except Exception as e:
                 if retry < max_retries - 1:
-                    print(f"Error generating batch embeddings (attempt {retry + 1}/{max_retries}): {e}")
-                    print(f"Retrying in {retry_delay} seconds...")
+                    logger.warning(f"Error generating batch embeddings: {e}")
+                    logger.warning(f"Retrying in {retry_delay} seconds...")
                     self.time.sleep(retry_delay)
                     retry_delay *= 2
                 else:
-                    print(f"Failed to create batch embeddings after {max_retries} attempts: {e}")
-                    print("Attempting to create embeddings individually as a fallback...")
+                    logger.error(f"Failed to create batch embeddings after {max_retries} attempts: {e}")
+                    logger.warning("Attempting to create embeddings individually as a fallback...")
                     embeddings = []
                     for i, text in enumerate(texts):
                         try:
                             emb = self._provider.create_embedding(text)
                             embeddings.append(emb)
                         except Exception as individual_error:
-                            print(f"Failed to create embedding for chunk {i}: {individual_error}")
+                            logger.error(f"Failed to create embedding for chunk {i}: {individual_error}")
                             embeddings.append([0.0] * self.dimension)
                     return embeddings

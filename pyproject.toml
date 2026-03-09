@@ -21,5 +21,6 @@ dependencies = [
     "tree-sitter-python",
     "sentence-transformers",
     "python-multipart",
-    "tree-sitter-java"
+    "tree-sitter-java",
+    "rich"
 ]

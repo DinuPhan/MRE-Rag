@@ -28,7 +28,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     "beautifulsoup4>=4.12.3" \
     "neo4j>=5.24.0" \
     "tree-sitter>=0.21.0" \
-    "tree-sitter-python"
+    "tree-sitter-python" \
+    "tree-sitter-java" \
+    "rich"
 
 # Stage 2: Runtime
 FROM mcr.microsoft.com/playwright/python:v1.48.0-jammy AS runtime

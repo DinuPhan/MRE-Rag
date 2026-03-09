@@ -2,6 +2,18 @@ import sys
 import os
 import asyncio
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import logging
+from rich.logging import RichHandler
+
+log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, log_level, logging.INFO),
+    format="%(message)s",
+    datefmt="[%X]",
+    handlers=[RichHandler(rich_tracebacks=True, force_terminal=True)]
+)
+
 from src.rag_pipeline import RagPipeline
 
 async def mock_crawl(*args, **kwargs):

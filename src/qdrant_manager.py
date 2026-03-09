@@ -4,7 +4,10 @@ from typing import List, Dict, Any, Optional
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams, PointStruct
 import uuid
+import logging
 from src.reranker import RerankerManager
+
+logger = logging.getLogger(__name__)
 
 class QdrantManager:
     def __init__(self, vector_size: int = 3072):
@@ -21,9 +24,9 @@ class QdrantManager:
                 self.client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key if qdrant_api_key else None)
                 # Verify connection
                 self.client.get_collections()
-                print(f"Connected to Qdrant server at {qdrant_url}")
+                logger.info(f"Connected to Qdrant server at {qdrant_url}")
             except Exception as e:
-                print(f"Failed to connect to Qdrant server at {qdrant_url}: {e}. Falling back to in-memory storage.")
+                logger.warning(f"Failed to connect to Qdrant server at {qdrant_url}: {e}. Falling back to in-memory storage.")
                 self.client = QdrantClient(location=":memory:")
         else:
             # Fallback to local in-memory mode
@@ -48,18 +51,19 @@ class QdrantManager:
         exists = any(c.name == collection_name for c in collections)
         
         if not exists:
-            print(f"Creating Qdrant collection: {collection_name}")
+            logger.info(f"Creating Qdrant collection: {collection_name}")
             self.client.create_collection(
                 collection_name=collection_name,
                 vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE),
             )
         else:
-            print(f"Qdrant collection {collection_name} already exists.")
+            logger.debug(f"Qdrant collection {collection_name} already exists.")
 
     def upsert_knowledge_chunks(self, collection_name: str, chunks: List[str], vectors: List[List[float]], metadatas: List[Dict[str, Any]]):
         """
         Upserts chunked text and their corresponding Gemini embeddings into Qdrant.
         """
+        logger.debug(f"Upserting {len(chunks)} chunks into collection: {collection_name}")
         self._ensure_collection_exists(collection_name)
         
         if len(chunks) != len(vectors) or len(chunks) != len(metadatas):
@@ -86,17 +90,19 @@ class QdrantManager:
             collection_name=collection_name,
             points=points
         )
-        print(f"Successfully inserted {len(points)} chunks into Qdrant collection {collection_name}.")
+        logger.info(f"Successfully inserted {len(points)} chunks into Qdrant collection {collection_name}.")
 
     def search(self, collection_name: str, query_vector: List[float], limit: int = 5, query_text: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Performs a semantic search against the Qdrant database.
         Optionally executes a two-stage retrieval cross-encoder reranking pass if `query_text` is provided.
         """
+        logger.debug(f"Executing search on collection: {collection_name} | Limit: {limit} | Two-Stage: {bool(query_text)}")
         self._ensure_collection_exists(collection_name)
         
         # If cross-encoding, fetch a larger pool initially
         fetch_limit = max(limit * 10, 50) if query_text else limit
+        logger.debug(f"Initial Bi-Encoder fetch limit set to: {fetch_limit}")
         
         search_result = self.client.query_points(
             collection_name=collection_name,
@@ -116,6 +122,7 @@ class QdrantManager:
             
         # Secondary Stage: Cross-Encoder Reranking
         if query_text and results:
+            logger.debug(f"Triggering cross-encoder reranking on {len(results)} bi-encoder hits")
             documents = [res["content"] for res in results]
             reranked_indices = self.reranker.rerank(query=query_text, documents=documents, top_n=limit)
             
@@ -131,6 +138,7 @@ class QdrantManager:
         """
         Performs a semantic search across all collections.
         """
+        logger.debug(f"Executing global search across all collections | Limit: {limit}")
         collections = self.client.get_collections().collections
         all_results = []
         
@@ -148,6 +156,7 @@ class QdrantManager:
         
         # Global Cross-Encoder Reranking
         if query_text and all_results:
+             logger.debug(f"Triggering global cross-encoder reranking on {len(all_results)} total bi-encoder hits")
              documents = [res["content"] for res in all_results]
              reranked_indices = self.reranker.rerank(query=query_text, documents=documents, top_n=limit)
              final_results = []
@@ -165,7 +174,8 @@ class QdrantManager:
         """
         code_collection = f"{collection_name}_code"
         try:
+            logger.debug(f"Performing specialized code search on: {code_collection}")
             return self.search(code_collection, query_vector, limit=limit, query_text=query_text)
         except Exception as e:
-            print(f"Code Collection Search Error (likely empty/nonexistent): {e}")
+            logger.warning(f"Code Collection Search Error (likely empty/nonexistent): {e}")
             return []

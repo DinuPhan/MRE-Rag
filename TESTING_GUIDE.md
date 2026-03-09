@@ -17,6 +17,16 @@ The generalized approach for running any test script is to execute it within the
 docker exec mre_rag-app-1 python3 /app/tests/<script_name>.py
 ```
 
+### Enabling Debug Logs & Colors
+
+The MRE-Rag system utilizes `rich` for structured and colorized terminal logging. By default, the logging level is set to `INFO`. To enable deep tracing and verbose output for debugging across the core `src/` pipelines (e.g., QdrantManager, RagPipeline, ContextGenerator), you can inject the `LOG_LEVEL=DEBUG` environment variable into the docker execution command. 
+
+Furthermore, because `docker exec` typically strips pseudo-TTY capabilities (which causes libraries to strip formatting), the test scripts have now been hardcoded using `force_terminal=True`. However, the safest and cleanest way to run an interactive colorized docker command yourself is using the `-it` (interactive TTY) flags:
+
+```bash
+docker exec -it -e LOG_LEVEL=DEBUG mre_rag-app-1 python3 /app/tests/<script_name>.py
+```
+
 ### Available Test Scripts
 
 #### 1. `test_chunker.py`

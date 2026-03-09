@@ -1,6 +1,9 @@
 import os
 from typing import Optional
 import httpx
+import logging
+
+logger = logging.getLogger(__name__)
 
 class BaseContextGenerator:
     def generate_code_example_title(self, code: str, context_before: str, context_after: str) -> str:
@@ -17,6 +20,7 @@ class GeminiContextGenerator(BaseContextGenerator):
         self.model_name = model_name
 
     def generate_code_example_title(self, code: str, context_before: str, context_after: str) -> str:
+        logger.debug(f"GeminiContextGenerator requesting code summary for snippet of length {len(code)}")
         prompt = self._build_prompt(code, context_before, context_after)
         try:
             from google import genai
@@ -28,9 +32,10 @@ class GeminiContextGenerator(BaseContextGenerator):
                     max_output_tokens=100
                 )
             )
+            logger.debug(f"Gemini code summarization successful. Snippet length: {len(response.text.strip())}")
             return response.text.strip()
         except Exception as e:
-            print(f"Error generating code example summary via Gemini: {e}")
+            logger.error(f"Error generating code example summary via Gemini: {e}", exc_info=True)
             return "Code Snippet"
 
     def _build_prompt(self, code: str, context_before: str, context_after: str) -> str:
@@ -57,6 +62,7 @@ class InhouseContextGenerator(BaseContextGenerator):
         self.model_name = os.getenv("INHOUSE_LLM_MODEL", "mistral")
 
     def generate_code_example_title(self, code: str, context_before: str, context_after: str) -> str:
+        logger.debug(f"InhouseContextGenerator requesting code summary for snippet of length {len(code)}")
         prompt = self._build_prompt(code, context_before, context_after)
         
         payload = {
@@ -74,6 +80,7 @@ class InhouseContextGenerator(BaseContextGenerator):
             
         try:
             with httpx.Client() as client:
+                logger.debug(f"Firing POST request to: {self.base_url}/chat/completions")
                 response = client.post(
                     f"{self.base_url}/chat/completions", 
                     headers=headers, 
@@ -85,16 +92,18 @@ class InhouseContextGenerator(BaseContextGenerator):
                 
                 # Check for standard OpenAI response
                 if "choices" in data and len(data["choices"]) > 0:
+                    logger.debug("Successfully parsed choices block from In-house LLM")
                     return data["choices"][0]["message"]["content"].strip()
                 # Check for direct 'message' fallback as per provided OpenAPI schema screenshot
                 elif "message" in data:
+                     logger.debug("Successfully parsed fallback message block from In-house LLM")
                      return data["message"].strip()
                 else:
-                     print(f"Unexpected response format from in-house LLM: {data}")
+                     logger.warning(f"Unexpected response format from in-house LLM: {data}")
                      return "Code Snippet"
                      
         except Exception as e:
-            print(f"Error generating code example summary via In-house LLM: {e}")
+            logger.error(f"Error generating code example summary via In-house LLM: {e}", exc_info=True)
             return "Code Snippet"
 
     def _build_prompt(self, code: str, context_before: str, context_after: str) -> str:
@@ -122,10 +131,10 @@ class ContextGenerator:
         provider_type = os.getenv("LLM_PROVIDER", "GEMINI").upper()
         
         if provider_type == "INHOUSE":
-            print(f"Initializing In-House Context Generator at {os.getenv('INHOUSE_LLM_BASE_URL')}")
+            logger.info(f"Initializing In-House Context Generator at {os.getenv('INHOUSE_LLM_BASE_URL')}")
             self._provider = InhouseContextGenerator()
         else:
-            print("Initializing standard Gemini Context Generator")
+            logger.info("Initializing standard Gemini Context Generator")
             self._provider = GeminiContextGenerator()
 
     def generate_code_example_title(self, code: str, context_before: str, context_after: str) -> str:

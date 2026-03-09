@@ -26,10 +26,12 @@ from dotenv import load_dotenv
 from neo4j import AsyncGraphDatabase
 
 # Configure logging
+from rich.logging import RichHandler
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S',
+    format="%(message)s",
+    datefmt="[%X]",
+    handlers=[RichHandler(rich_tracebacks=True)]
 )
 logger = logging.getLogger(__name__)
 

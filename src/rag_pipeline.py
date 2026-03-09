@@ -6,6 +6,9 @@ from src.embeddings import EmbeddingManager
 from src.qdrant_manager import QdrantManager
 from src.chunking import IntelligentChunker, extract_code_blocks
 from src.context_generator import ContextGenerator
+import logging
+
+logger = logging.getLogger(__name__)
 
 class RagPipeline:
     def __init__(self):
@@ -23,6 +26,7 @@ class RagPipeline:
         Deprecated: Native naive chunking. Preserved for backward compatibility.
         Routes to the new IntelligentChunker.
         """
+        logger.debug(f"Routing text chunking to IntelligentChunker (Size: {chunk_size})")
         if chunk_size != getattr(self.chunker, 'chunk_size', 1500):
             self.chunker.chunk_size = chunk_size
         return self.chunker.chunk_text(text)
@@ -32,12 +36,15 @@ class RagPipeline:
         Crawls a URL (or sitemap/.txt), chunks the content from all pages, embeds them, and saves to Qdrant.
         When enable_contextual_ai=True, extracts code snippets and uses Gemini to write a title for them before embedding.
         """
+        logger.debug(f"Initiating RAG ingestion pipeline | URL: {url} | Max Depth: {max_depth} | Contextual AI: {enable_contextual_ai}")
         if enable_contextual_ai and not self.context_generator:
             self.context_generator = ContextGenerator()
             
         # 1. Crawl
+        logger.debug("Phase 1: Crawling URL...")
         crawl_results = await self.crawler.crawl_urls(url, max_depth=max_depth, max_pages=max_pages)
         if not crawl_results:
+            logger.warning(f"Crawl returned no results for URL: {url}")
             return {"success": False, "error": "No pages were successfully crawled."}
             
         all_chunks = []
@@ -47,6 +54,7 @@ class RagPipeline:
         all_code_metadatas = []
         
         # 2. Chunk and Extract
+        logger.debug("Phase 2: Extracting standard prose and isolated code chunks...")
         for crawl_result in crawl_results:
             markdown = crawl_result["markdown"]
             page_url = crawl_result["url"]
@@ -87,11 +95,13 @@ class RagPipeline:
                 })
                 
         if not all_chunks:
+            logger.warning("Chunking process failed to yield any valid text segments.")
             return {"success": False, "error": "No text extracted to chunk from any page."}
             
-        print(f"Extracted {len(all_chunks)} prose chunks and {len(all_code_chunks)} code snippets from {len(crawl_results)} pages.")
+        logger.info(f"Extracted {len(all_chunks)} prose chunks and {len(all_code_chunks)} code snippets from {len(crawl_results)} pages.")
         
         # 3. Embed (in batches to avoid overwhelming the Embedding API payload limits)
+        logger.debug("Phase 3: Beginning concurrent vectorized embedding via EmbeddingManager...")
         vectors = []
         code_vectors = []
         try:
@@ -120,6 +130,7 @@ class RagPipeline:
         # 4. Insert
         # We group all sub-pages under the collection name of the initial target URL
         collection_name = QdrantManager.escape_url(url)
+        logger.debug(f"Phase 4: Upserting {len(vectors)} generic chunks and {len(code_vectors)} code nodes into DB Collection: {collection_name}")
         
         # Upsert Standard Prose
         self.qdrant.upsert_knowledge_chunks(collection_name, all_chunks, vectors, all_metadatas)
@@ -142,6 +153,7 @@ class RagPipeline:
         Queries the Qdrant database using Gemini embedding on the query.
         When code_search=True, semantically expands the query to match AI contextual code prefixes.
         """
+        logger.debug(f"Executing external search across Database | URL context limit: {url} | Top N: {limit} | Strict Code Search: {code_search}")
         try:
             # Enhanced Query Expansion for Code Search
             if code_search:
@@ -161,7 +173,7 @@ class RagPipeline:
                 # search_all currently doesn't natively fork prose vs code, so it searches global default logic
                 return self.qdrant.search_all(query_vector=query_vector, limit=limit, query_text=query_text)
         except Exception as e:
-            print(f"Query Error: {e}")
+            logger.error(f"Query Error: {e}", exc_info=True)
             return []
 
 if __name__ == "__main__":
