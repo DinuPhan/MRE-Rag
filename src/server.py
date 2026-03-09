@@ -33,8 +33,8 @@ async def lifespan(app: FastAPI):
 # Define Pydantic models for REST endpoints
 class CrawlRequest(BaseModel):
     url: str
-    max_depth: int = 0
-    max_pages: int = 10
+    max_depth: Optional[int] = None
+    max_pages: Optional[int] = None
 
 class QueryRequest(BaseModel):
     query: str
@@ -181,7 +181,7 @@ async def kg_validate_endpoint(request: ValidateScriptRequest):
 mcp = FastMCP("mre-rag-mcp")
 
 @mcp.tool()
-async def crawl_website(url: str, max_depth: int = 0, max_pages: int = 10) -> str:
+async def crawl_website(url: str, max_depth: int = None, max_pages: int = None) -> str:
     """
     Crawl a web page (or .xml sitemap), extract markdown, generate embeddings, and store in Qdrant.
     It will also export local raw text chunks (llms.txt format).

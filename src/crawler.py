@@ -35,12 +35,15 @@ class MreCrawler:
             print(f"Error parsing sitemap {sitemap_url}: {e}")
         return urls
 
-    async def crawl_urls(self, start_url: str, max_depth: int = 0, max_pages: int = 10) -> List[dict]:
+    async def crawl_urls(self, start_url: str, max_depth: int = None, max_pages: int = None) -> List[dict]:
         """
         Crawls a URL (or sitemap/.txt list), with optional recursive internal link discovery.
         Returns a list of extracted markdown dictionaries.
         """
-        print(f"Starting execution for: {start_url} (Max Depth: {max_depth}, Max Pages: {max_pages})")
+        eval_max_depth = max_depth if max_depth is not None else int(os.getenv("CRAWL_MAX_DEPTH", "0"))
+        eval_max_pages = max_pages if max_pages is not None else int(os.getenv("CRAWL_MAX_PAGES", "10"))
+        
+        print(f"Starting execution for: {start_url} (Max Depth: {eval_max_depth}, Max Pages: {eval_max_pages})")
         
         config = CrawlerRunConfig(
             markdown_generator=DefaultMarkdownGenerator()
@@ -54,24 +57,24 @@ class MreCrawler:
         if start_url.lower().endswith('.xml'):
             print(f"Detected sitemap: {start_url}")
             sitemap_urls = await self._fetch_sitemap_urls(start_url)
-            queue = [(u, 0) for u in sitemap_urls[:max_pages]]
+            queue = [(u, 0) for u in sitemap_urls[:eval_max_pages]]
         elif start_url.lower().endswith('.txt'):
             print(f"Detected text list: {start_url}")
             try:
                 async with httpx.AsyncClient() as client:
                     response = await client.get(start_url, timeout=10.0)
                     urls = [line.strip() for line in response.text.splitlines() if line.strip().startswith("http")]
-                    queue = [(u, 0) for u in urls[:max_pages]]
+                    queue = [(u, 0) for u in urls[:eval_max_pages]]
             except Exception as e:
                 print(f"Error reading txt {start_url}: {e}")
         else:
             queue = [(start_url, 0)]
             
         async with AsyncWebCrawler() as crawler:
-            while queue and len(visited_urls) < max_pages:
+            while queue and len(visited_urls) < eval_max_pages:
                 # Process in batches to avoid overwhelming Crawl4AI
                 current_batch = []
-                while queue and len(current_batch) < 5 and (len(visited_urls) + len(current_batch)) < max_pages:
+                while queue and len(current_batch) < 5 and (len(visited_urls) + len(current_batch)) < eval_max_pages:
                     url, depth = queue.pop(0)
                     if url not in visited_urls:
                         visited_urls.add(url)
@@ -108,7 +111,7 @@ class MreCrawler:
                     })
                     
                     # 2. Recursive Link Extraction
-                    if depth < max_depth:
+                    if depth < eval_max_depth:
                         internal_links = result.links.get("internal", [])
                         for link_info in internal_links:
                             next_url = link_info.get("href")

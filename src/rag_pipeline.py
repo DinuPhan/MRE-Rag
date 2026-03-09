@@ -31,7 +31,7 @@ class RagPipeline:
             self.chunker.chunk_size = chunk_size
         return self.chunker.chunk_text(text)
 
-    async def ingest_url(self, url: str, max_depth: int = 0, max_pages: int = 10, enable_contextual_ai: bool = False) -> dict:
+    async def ingest_url(self, url: str, max_depth: int = None, max_pages: int = None, enable_contextual_ai: bool = False) -> dict:
         """
         Crawls a URL (or sitemap/.txt), chunks the content from all pages, embeds them, and saves to Qdrant.
         When enable_contextual_ai=True, extracts code snippets and uses Gemini to write a title for them before embedding.
