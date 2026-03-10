@@ -96,20 +96,22 @@ class QdrantManager:
             )
             points.append(point)
             
-        # Perform the batch upsert
-        self.client.upsert(
+        # Perform the batch upsert natively using upload_points for large-scale stability
+        self.client.upload_points(
             collection_name=collection_name,
-            points=points
+            points=points,
+            wait=True
         )
-        logger.info(f"Successfully inserted {len(points)} chunks into Qdrant collection {collection_name}.")
+        logger.info(f"Successfully uploaded {len(points)} chunks into Qdrant collection {collection_name} via native batching.")
 
-    def search(self, collection_name: str, query_vector: List[float], limit: int = 5, query_text: Optional[str] = None, url_filter: Optional[str] = None) -> List[Dict[str, Any]]:
+    def search(self, collection_name: str, query_vector: List[float], limit: int = 5, query_text: Optional[str] = None, url_filter: Optional[str] = None, score_threshold: float = 0.3) -> List[Dict[str, Any]]:
         """
         Performs a semantic search against the Qdrant database.
         Applies a fast Payload Index metadata filter if `url_filter` is provided.
+        Filters out low-relevance bi-encoder results using `score_threshold`.
         Optionally executes a two-stage retrieval cross-encoder reranking pass if `query_text` is provided.
         """
-        logger.debug(f"Executing search on collection: {collection_name} | Limit: {limit} | Two-Stage: {bool(query_text)} | Filter: {url_filter}")
+        logger.debug(f"Executing search on collection: {collection_name} | Limit: {limit} | Two-Stage: {bool(query_text)} | Filter: {url_filter} | Threshold: {score_threshold}")
         self._ensure_collection_exists(collection_name)
         
         # Build the payload filter
@@ -132,7 +134,8 @@ class QdrantManager:
             collection_name=collection_name,
             query=query_vector,
             query_filter=query_filter,
-            limit=fetch_limit
+            limit=fetch_limit,
+            score_threshold=score_threshold
         ).points
         
         # Format the rough bi-encoder results cleanly
