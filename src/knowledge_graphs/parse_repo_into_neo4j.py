@@ -355,7 +355,23 @@ class JavaTreeSitterAnalyzer(AbstractTreeSitterAnalyzer):
             
             tree = self.parser.parse(bytes(content, "utf8"))
             relative_path = str(file_path.relative_to(repo_root))
-            module_name = self._get_importable_module_name(file_path, repo_root, relative_path)
+            
+            # Extract package declaration for Java
+            package_name = ""
+            for node in tree.root_node.children:
+                if node.type == 'package_declaration':
+                    # Find the scoped identifier or identifier within the package declaration
+                    for child in node.children:
+                        if child.type in ('scoped_identifier', 'identifier'):
+                            package_name = content[child.start_byte:child.end_byte]
+                            break
+                    break
+                    
+            if package_name:
+                file_stem = file_path.stem
+                module_name = f"{package_name}.{file_stem}"
+            else:
+                module_name = self._get_importable_module_name(file_path, repo_root, relative_path)
             
             classes = []
             functions = [] # Java doesn't have top-level functions but we keep contract
@@ -628,6 +644,10 @@ class DirectNeo4jExtractor:
 
     def checkout_repo(self, repo_url: str, target_dir: str) -> tuple[str, str]:
         """Clone or update repository and return the target dir and HEAD commit hash"""
+        if os.path.isdir(repo_url):
+            logger.info(f"Using local directory instead of cloning: {repo_url}")
+            return repo_url, "local-directory"
+            
         logger.info(f"Checking out repository to: {target_dir}")
         if os.path.exists(target_dir):
             logger.info(f"Repository exists. Restoring and pulling latest changes in {target_dir}")
@@ -1034,9 +1054,10 @@ async def main():
     try:
         await extractor.initialize()
         
+        import sys
+        repo_url = sys.argv[1] if len(sys.argv) > 1 else "https://github.com/getzep/graphiti.git"
+        
         # Analyze repository - direct Neo4j, no LLM processing!
-        # repo_url = "https://github.com/pydantic/pydantic-ai.git"
-        repo_url = "https://github.com/getzep/graphiti.git"
         await extractor.analyze_repository(repo_url)
         
         # Direct graph queries

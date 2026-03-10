@@ -120,12 +120,25 @@ class KnowledgeGraphValidator:
         self.knowledge_graph_modules: Set[str] = set()  # Track modules in knowledge graph
     
     async def initialize(self):
-        """Initialize Neo4j connection"""
+        """Initialize Neo4j connection and load schema cache"""
         self.driver = AsyncGraphDatabase.driver(
             self.neo4j_uri, 
             auth=(self.neo4j_user, self.neo4j_password)
         )
+        await self._load_knowledge_graph_schema()
         logger.info("Knowledge graph validator initialized")
+        
+    async def _load_knowledge_graph_schema(self):
+        """Pre-load known base modules from the knowledge graph."""
+        try:
+            async with self.driver.session() as session:
+                query = "MATCH (f:File) RETURN DISTINCT split(f.module_name, '.')[0] AS base_module"
+                result = await session.run(query)
+                async for record in result:
+                    if record['base_module']:
+                        self.knowledge_graph_modules.add(record['base_module'])
+        except Exception as e:
+            logger.error(f"Failed to load knowledge graph schema: {e}")
     
     async def close(self):
         """Close Neo4j connection"""
