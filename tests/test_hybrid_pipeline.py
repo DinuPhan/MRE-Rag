@@ -15,6 +15,7 @@ logging.basicConfig(
 )
 
 from src.rag_pipeline import RagPipeline
+from src.qdrant_manager import PROSE_COLLECTION, CODE_COLLECTION
 
 async def mock_crawl(*args, **kwargs):
     return [{
@@ -35,7 +36,6 @@ This example is very good and is used to test the backend.
 
 async def run_test():
     pipeline = RagPipeline()
-    collection = pipeline.qdrant.escape_url("hybrid_test")
     
     # Overwrite crawler just for the test
     pipeline.crawler.crawl_urls = mock_crawl
@@ -46,8 +46,8 @@ async def run_test():
     
     # Reset
     try:
-        pipeline.qdrant.client.delete_collection(collection)
-        pipeline.qdrant.client.delete_collection(collection + "_code")
+        pipeline.qdrant.client.delete_collection(PROSE_COLLECTION)
+        pipeline.qdrant.client.delete_collection(CODE_COLLECTION)
     except: pass
     
     print("\n--- Running AI-CONTEXT Ingestion ---")

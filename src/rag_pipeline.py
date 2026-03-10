@@ -3,7 +3,7 @@ import concurrent.futures
 from typing import List, Dict, Any
 from src.crawler import MreCrawler
 from src.embeddings import EmbeddingManager
-from src.qdrant_manager import QdrantManager
+from src.qdrant_manager import QdrantManager, PROSE_COLLECTION, CODE_COLLECTION
 from src.chunking import IntelligentChunker, extract_code_blocks
 from src.context_generator import ContextGenerator
 import logging
@@ -128,20 +128,19 @@ class RagPipeline:
             return {"success": False, "error": f"Embedding generator failed: {str(e)}"}
             
         # 4. Insert
-        # We group all sub-pages under the collection name of the initial target URL
-        collection_name = QdrantManager.escape_url(url)
-        logger.debug(f"Phase 4: Upserting {len(vectors)} generic chunks and {len(code_vectors)} code nodes into DB Collection: {collection_name}")
+        # We consolidate all pages into global knowledge collections
+        logger.debug(f"Phase 4: Upserting {len(vectors)} generic chunks and {len(code_vectors)} code nodes into Global Collections")
         
         # Upsert Standard Prose
-        self.qdrant.upsert_knowledge_chunks(collection_name, all_chunks, vectors, all_metadatas)
+        self.qdrant.upsert_knowledge_chunks(PROSE_COLLECTION, all_chunks, vectors, all_metadatas)
         
         # Upsert Code Snippets
         if all_code_chunks:
-            self.qdrant.upsert_knowledge_chunks(f"{collection_name}_code", all_code_chunks, code_vectors, all_code_metadatas)
+            self.qdrant.upsert_knowledge_chunks(CODE_COLLECTION, all_code_chunks, code_vectors, all_code_metadatas)
         
         return {
             "success": True,
-            "message": f"Successfully ingested {len(crawl_results)} pages into Qdrant collection '{collection_name}'.",
+            "message": f"Successfully ingested {len(crawl_results)} pages into global collections.",
             "chunks_processed": len(all_chunks),
             "code_snippets_processed": len(all_code_chunks),
             "pages_processed": len(crawl_results),
@@ -151,27 +150,29 @@ class RagPipeline:
     def query(self, text: str, url: str = None, limit: int = 5, code_search: bool = False) -> List[Dict[str, Any]]:
         """
         Queries the Qdrant database using Gemini embedding on the query.
-        When code_search=True, semantically expands the query to match AI contextual code prefixes.
+        When code_search=True, semantically expands the query to match AI contextual code prefixes and routes to the code collection.
+        If `url` is provided, filters the search to only hit chunks deriving from that url.
         """
-        logger.debug(f"Executing external search across Database | URL context limit: {url} | Top N: {limit} | Strict Code Search: {code_search}")
+        logger.debug(f"Executing external search across Database | URL filter: {url} | Top N: {limit} | Strict Code Search: {code_search}")
         try:
             # Enhanced Query Expansion for Code Search
             if code_search:
                 query_text = f"Code example for {text}\n\nSummary: Example code showing {text}"
+                collection_name = CODE_COLLECTION
             else:
                 query_text = text
+                collection_name = PROSE_COLLECTION
                 
             query_vector = self.embeddings.create_embedding(query_text)
             
-            if url:
-                collection_name = QdrantManager.escape_url(url)
-                if code_search:
-                    return self.qdrant.search_code(collection_name, query_vector=query_vector, limit=limit, query_text=query_text)
-                else:
-                    return self.qdrant.search(collection_name, query_vector=query_vector, limit=limit, query_text=query_text)
-            else:
-                # search_all currently doesn't natively fork prose vs code, so it searches global default logic
-                return self.qdrant.search_all(query_vector=query_vector, limit=limit, query_text=query_text)
+            # Execute global multi-tenant search with optional URL payload filtering
+            return self.qdrant.search(
+                collection_name=collection_name, 
+                query_vector=query_vector, 
+                limit=limit, 
+                query_text=query_text,
+                url_filter=url
+            )
         except Exception as e:
             logger.error(f"Query Error: {e}", exc_info=True)
             return []

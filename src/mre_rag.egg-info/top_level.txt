@@ -1,5 +1,0 @@
-crawler
-embeddings
-qdrant_client
-rag_pipeline
-server
